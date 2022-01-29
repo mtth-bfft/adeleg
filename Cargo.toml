@@ -1,0 +1,17 @@
+[package]
+name = "adeleg"
+version = "0.1.0"
+edition = "2018"
+authors = ["Aurélien Bordes <aurelien.bordes@ssi.gouv.fr>", "Matthieu Buffet <matthieu.buffet@ssi.gouv.fr>"]
+
+[dependencies]
+clap = "3.0.13"
+
+[dependencies.windows]
+version = "0.30.0"
+features = [
+    "alloc",
+    "Win32_Foundation",
+    "Win32_Networking_Ldap",
+    "Win32_System_Rpc",
+]
