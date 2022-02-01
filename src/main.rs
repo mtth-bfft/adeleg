@@ -1,7 +1,12 @@
 mod connection;
+mod utils;
+mod search;
+mod error;
+mod schema;
 use connection::{LdapConnection, LdapCredentials};
 use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
+use crate::schema::dump_schema;
 
 fn main() {
     let default_port = format!("{}", LDAP_PORT);
@@ -10,37 +15,37 @@ fn main() {
         .about(env!("CARGO_PKG_DESCRIPTION"))
         .arg(
             Arg::new("server")
-                .help("(explicit server) Non-default LDAP server hostname or IP")
+                .help("(explicit server) LDAP server hostname or IP")
                 .long("server")
                 .short('s')
                 .number_of_values(1)
         )
         .arg(
             Arg::new("port")
-                .help("(explicit server) Non-default LDAP port")
+                .help("(explicit server) LDAP port")
                 .long("port")
                 .number_of_values(1)
                 .default_value(&default_port)
         )
         .arg(
             Arg::new("domain")
-                .help("(explicit credentials) Non-implicit Domain name")
+                .help("(explicit credentials) Logon domain name")
                 .long("domain")
                 .short('d')
                 .number_of_values(1)
-                .requires("username")
+                .requires_all(&["username", "password"])
         )
         .arg(
             Arg::new("username")
-                .help("(explicit credentials) Non-implicit User name")
+                .help("(explicit credentials) Logon user name")
                 .long("user")
                 .short('u')
                 .number_of_values(1)
-                .requires("domain")
+                .requires_all(&["domain","password"])
         )
         .arg(
             Arg::new("password")
-                .help("(explicit credentials) Non-Implicit Password")
+                .help("(explicit credentials) Logon Password")
                 .long("password")
                 .short('p')
                 .number_of_values(1)
@@ -51,7 +56,7 @@ fn main() {
     let server= args.value_of("server");
     let port = args.value_of("port").expect("no port set");
     let port = match port.parse::<u16>() {
-        Ok(n) => n,
+        Ok(n) if n > 0 => n,
         _ => {
             eprintln!("Unable to parse \"{}\" as TCP port", port);
             std::process::exit(1);
@@ -72,15 +77,20 @@ fn main() {
 
     let conn = match LdapConnection::new(server, port, credentials.as_ref()) {
         Ok(c) => c,
-        Err((code, msg)) => {
-            eprintln!("Unable to connect to \"{}:{}\" : {}", server.unwrap_or("default"), port, msg);
-            std::process::exit(code as i32);
+        Err(e) => {
+            eprintln!("Unable to connect to \"{}:{}\" : {}", server.unwrap_or("default"), port, e);
+            std::process::exit(1);
         }
     };
 
-    if let Err((code, msg)) = conn.destroy() {
-        eprintln!("Error when closing connection to \"{}:{}\" : {}", server.unwrap_or("default"), port, msg);
-        std::process::exit(code as i32);
+    if let Err(e) = dump_schema(&conn) {
+        eprintln!("Error when analyzing schema: {}", e);
+        std::process::exit(1);
+    }
+
+    if let Err(e) = conn.destroy() {
+        eprintln!("Error when closing connection to \"{}:{}\" : {}", server.unwrap_or("default"), port, e);
+        std::process::exit(1);
     }
     println!("Ok!");
 }

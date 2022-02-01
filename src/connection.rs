@@ -1,7 +1,12 @@
 use core::ptr::null_mut;
+use crate::error::LdapError;
 use windows::Win32::Foundation::PSTR;
-use windows::Win32::Networking::Ldap::{ldap_initW, ldap_unbind, LdapGetLastError, ldap_connect, LDAP_TIMEVAL, LDAP_SUCCESS, ldap_bind_sA, ldap_err2stringW, ldap};
+use windows::Win32::Networking::Ldap::{ldap_initW, ldap_unbind, ldap_connect, LDAP_TIMEVAL, LDAP_SUCCESS, ldap_bind_sA, ldap, LDAP_SCOPE_BASE};
 use windows::Win32::System::Rpc::{SEC_WINNT_AUTH_IDENTITY_W, SEC_WINNT_AUTH_IDENTITY_UNICODE};
+use crate::utils::{get_ldap_errcode, str_to_wstr, get_attr_str, get_attr_strs};
+use crate::search::{LdapSearch, LdapEntry};
+use std::collections::HashSet;
+use std::iter::FromIterator;
 
 const LDAP_AUTH_NEGOTIATE: u32 = 1158;
 
@@ -11,12 +16,15 @@ pub struct LdapCredentials<'a> {
     pub password: &'a str,
 }
 
+#[derive(Debug)]
 pub struct LdapConnection {
-    handle: *mut ldap,
+    pub(crate) handle: *mut ldap,
+    pub(crate) capabilities: HashSet<String>,
+    pub(crate) schema_naming_context: String,
 }
 
 impl LdapConnection {
-    pub fn new(server: Option<&str>, port: u16, credentials: Option<&LdapCredentials>) -> Result<Self, (u32, String)> {
+    pub fn new(server: Option<&str>, port: u16, credentials: Option<&LdapCredentials>) -> Result<Self, LdapError> {
         let handle = unsafe {
             if let Some(server) = server {
                 ldap_initW(server, port as u32)
@@ -25,7 +33,7 @@ impl LdapConnection {
             }
         };
         if handle.is_null() {
-            return Err((get_ldap_errcode(), get_ldap_errmsg()));
+            return Err(LdapError::ConnectionFailed(get_ldap_errcode()));
         }
 
         // The actual connection timeout is much higher than that, since underlying
@@ -38,8 +46,8 @@ impl LdapConnection {
         let conn = unsafe {
             ldap_connect(handle, &mut timeout)
         };
-        if conn != LDAP_SUCCESS as u32 {
-            return Err((get_ldap_errcode(), get_ldap_errmsg()));
+        if conn != (LDAP_SUCCESS as u32) {
+            return Err(LdapError::ConnectionFailed(get_ldap_errcode()));
         }
 
         let mut domain_wstr;
@@ -69,18 +77,43 @@ impl LdapConnection {
 
         let res = unsafe { ldap_bind_sA(handle, None, creds, LDAP_AUTH_NEGOTIATE) };
         if res != LDAP_SUCCESS as u32 {
-            return Err((get_ldap_errcode(), get_ldap_errmsg()));
+            return Err(LdapError::BindFailed(get_ldap_errcode()));
         }
 
-        Ok(Self {
+        let mut conn = Self {
             handle,
-        })
+            capabilities: HashSet::new(),
+            schema_naming_context: String::new(),
+        };
+
+        let search = LdapSearch::new(&conn, None, LDAP_SCOPE_BASE, None, Some(&["supportedCapabilities", "schemaNamingContext"]))?;
+        let rootdse = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
+        let rootdse = if rootdse.len() != 1 {
+            return Err(LdapError::RootDSEQueryFailed);
+        } else {
+            &rootdse[0].attrs
+        };
+
+        if let Some(schema_naming_context) = get_attr_str(rootdse, "schemanamingcontext") {
+            conn.schema_naming_context = schema_naming_context;
+        } else {
+            return Err(LdapError::RootDSEAttributeMissing);
+        }
+        let capabilities = get_attr_strs(rootdse, "supportedcapabilities");
+        let capabilities = HashSet::from_iter(capabilities.unwrap().into_iter());
+        conn.capabilities = capabilities;
+
+        Ok(conn)
     }
 
-    pub fn destroy(&self) -> Result<(), (u32, String)> {
+    pub fn get_errcode(&self) -> u32 {
+        unsafe { (*self.handle).ld_errno }
+    }
+
+    pub fn destroy(&self) -> Result<(), LdapError> {
         let res = unsafe { ldap_unbind(self.handle) };
                 if res != LDAP_SUCCESS as u32 {
-            return Err((get_ldap_errcode(), get_ldap_errmsg()));
+            return Err(LdapError::UnbindFailed(get_ldap_errcode()));
         }
         Ok(())
     }
@@ -89,30 +122,5 @@ impl LdapConnection {
 impl Drop for LdapConnection {
     fn drop(&mut self) {
         let _ = self.destroy();
-    }
-}
-
-fn str_to_wstr(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-pub(crate) fn get_ldap_errcode() -> u32 {
-    unsafe { LdapGetLastError() }
-}
-
-pub(crate) fn get_ldap_errmsg() -> String {
-    let code = get_ldap_errcode();
-    let res = unsafe { ldap_err2stringW(code) };
-    if res.is_null() {
-        format!("Unknown error code {}", code)
-    } else {
-        let mut len = 0;
-        unsafe {
-            while *(res.0.add(len)) != 0 {
-                len += 1;
-            }
-        }
-        let slice = unsafe { &*(std::ptr::slice_from_raw_parts(res.0, len)) };
-        String::from_utf16_lossy(slice)
     }
 }
