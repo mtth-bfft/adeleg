@@ -55,7 +55,10 @@ impl<'a> LdapSearch<'a> {
                 unsafe { ldap_msgfree(result_page) };
             }
             return Err(LdapError::SearchFailed {
-                code: res, // TODO: add parameters (base, scope, filter, attributes)
+                base: base.map(|v| v.to_owned()),
+                filter: filter.map(|v| v.to_owned()),
+                only_attributes: only_attributes.map(|v| v.iter().map(|w| (*w).to_owned()).collect::<Vec<String>>()),
+                code: res,
             });
         }
         let cursor_entry = unsafe { ldap_first_entry(connection.handle, result_page) };

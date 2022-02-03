@@ -3,10 +3,12 @@ mod utils;
 mod search;
 mod error;
 mod schema;
+mod security_descriptor;
 use connection::{LdapConnection, LdapCredentials};
 use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
 use crate::schema::dump_schema;
+use crate::security_descriptor::dump_security_descriptors;
 
 fn main() {
     let default_port = format!("{}", LDAP_PORT);
@@ -86,6 +88,11 @@ fn main() {
     if let Err(e) = dump_schema(&conn) {
         eprintln!("Error when analyzing schema: {}", e);
         std::process::exit(1);
+    }
+
+    for naming_context in &conn.naming_contexts {
+        println!("Fetching security descriptors of naming context {}", naming_context);
+        dump_security_descriptors(&conn, naming_context);
     }
 
     if let Err(e) = conn.destroy() {

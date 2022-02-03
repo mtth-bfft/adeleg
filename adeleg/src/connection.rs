@@ -20,6 +20,7 @@ pub struct LdapCredentials<'a> {
 pub struct LdapConnection {
     pub(crate) handle: *mut ldap,
     pub(crate) capabilities: HashSet<String>,
+    pub(crate) naming_contexts: HashSet<String>,
     pub(crate) schema_naming_context: String,
 }
 
@@ -83,10 +84,11 @@ impl LdapConnection {
         let mut conn = Self {
             handle,
             capabilities: HashSet::new(),
+            naming_contexts: HashSet::new(),
             schema_naming_context: String::new(),
         };
 
-        let search = LdapSearch::new(&conn, None, LDAP_SCOPE_BASE, None, Some(&["supportedCapabilities", "schemaNamingContext"]))?;
+        let search = LdapSearch::new(&conn, None, LDAP_SCOPE_BASE, None, Some(&["supportedCapabilities", "schemaNamingContext", "namingContexts"]))?;
         let rootdse = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
         let rootdse = if rootdse.len() != 1 {
             return Err(LdapError::RootDSEQueryFailed);
@@ -94,11 +96,18 @@ impl LdapConnection {
             &rootdse[0].attrs
         };
 
+        if let Some(naming_contexts) = get_attr_strs(rootdse, "namingcontexts") {
+            conn.naming_contexts = HashSet::from_iter(naming_contexts.into_iter());
+        } else {
+            return Err(LdapError::RootDSEAttributeMissing);
+        }
+
         if let Some(schema_naming_context) = get_attr_str(rootdse, "schemanamingcontext") {
             conn.schema_naming_context = schema_naming_context;
         } else {
             return Err(LdapError::RootDSEAttributeMissing);
         }
+
         let capabilities = get_attr_strs(rootdse, "supportedcapabilities");
         let capabilities = HashSet::from_iter(capabilities.unwrap().into_iter());
         conn.capabilities = capabilities;

@@ -11,7 +11,6 @@ pub(crate) fn dump_schema(conn: &LdapConnection) -> Result<(), LdapError> {
         "schemaIDGUID",
         "adminDisplayName",
     ]))?;
-    let classes = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
-    
+    let class_list = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
     Ok(())
 }
