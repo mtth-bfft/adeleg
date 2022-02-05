@@ -1,43 +1,53 @@
-use core::ptr::null_mut;
 use core::fmt::Display;
-use std::borrow::Cow;
 use crate::error::AuthzError;
-use windows::Win32::Security::{IsValidSid, GetLengthSid, ACL_SIZE_INFORMATION, GetAclInformation, AclSizeInformation, ACL};
-use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
-use windows::Win32::Foundation::{PSID, PWSTR, GetLastError};
-use windows::Win32::System::Memory::LocalFree;
+use windows::Win32::Security::{ACL_SIZE_INFORMATION, GetAclInformation, AclSizeInformation, ACL, GetAce, ACE_HEADER};
+use windows::Win32::Foundation::GetLastError;
 use windows::core::alloc::fmt::Formatter;
-use crate::utils::pwstr_to_str;
+use crate::Ace;
+use std::ptr::null;
 
 #[derive(Debug)]
-pub struct Acl<'a> {
-    bytes: Cow<'a, [u8]>,
+pub struct Acl {
+    aces: Vec<Ace>,
 }
 
-impl<'a> Acl<'a> {
-    pub fn parse(slice: &'a [u8]) -> Result<Self, AuthzError> {
-        let expected_size = unsafe {
-            let mut size_info = ACL_SIZE_INFORMATION {
-                AceCount: 0,
-                AclBytesInUse: 0,
-                AclBytesFree: 0
-            };
-            let succeeded = GetAclInformation(slice.as_ptr() as *mut ACL, &mut size_info as *mut _ as *mut _, std::mem::size_of_val(&size_info) as u32, AclSizeInformation);
-            if !succeeded.as_bool() {
-                return Err(AuthzError::GetAclInformationFailed { bytes: slice.to_vec(), code: unsafe { GetLastError() } });
-            }
-            size_info.AclBytesInUse + size_info.AclBytesFree
-        } as usize;
+impl Acl {
+    pub fn from(slice: &[u8]) -> Result<Self, AuthzError> {
+        let mut info = ACL_SIZE_INFORMATION {
+            AceCount: 0,
+            AclBytesInUse: 0,
+            AclBytesFree: 0
+        };
+        let succeeded = unsafe { GetAclInformation(slice.as_ptr() as *mut ACL, &mut info as *mut _ as *mut _, std::mem::size_of_val(&info) as u32, AclSizeInformation) };
+        if !succeeded.as_bool() {
+            return Err(AuthzError::GetAclInformationFailed { bytes: slice.to_vec(), code: unsafe { GetLastError() } });
+        }
+        let expected_size = (info.AclBytesInUse + info.AclBytesFree) as usize;
         if expected_size != slice.len() {
             return Err(AuthzError::UnexpectedAclSize { bytes: slice.to_vec(), expected_size: expected_size as usize });
         }
-        Ok(Acl {
-            bytes: Cow::Borrowed(slice),
+        let mut aces = Vec::new();
+        for ace_index in 0..info.AceCount {
+            let mut ace: *const ACE_HEADER = null() as *const _;
+            let succeeded = unsafe { GetAce(slice.as_ptr() as *const _, ace_index, &mut ace as *mut _ as *mut _) };
+            if !succeeded.as_bool() || (ace as usize) < (slice.as_ptr() as usize) || (ace as usize) >= (slice.as_ptr() as usize + slice.len())  {
+                return Err(AuthzError::GetAceFailed { bytes: slice.to_vec(), ace_index, code: unsafe { GetLastError() } });
+            }
+            let expected_size = unsafe { (*ace).AceSize } as usize;
+            let offset = (ace as usize) - (slice.as_ptr() as usize);
+            if (offset + expected_size) > slice.len() {
+                return Err(AuthzError::UnexpectedAceSize { bytes: slice.to_vec(), ace_index, expected_size });
+            }
+            aces.push(Ace::from_bytes(&slice[offset..offset+expected_size])?);
+        }
+
+        Ok(Self {
+            aces,
         })
     }
 }
 
-impl Display for Acl<'_> {
+impl Display for Acl {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(f, "ACL={:?}", self)
     }

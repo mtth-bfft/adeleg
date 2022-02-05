@@ -32,7 +32,7 @@ impl Display for LdapError {
             Self::ConnectionFailed(code) => write!(f, "connection failed ({})", get_ldap_errmsg(*code)),
             Self::BindFailed(code) => write!(f, "bind failed ({})", get_ldap_errmsg(*code)),
             Self::UnbindFailed(code) => write!(f, "unbind failed ({})", get_ldap_errmsg(*code)),
-            Self::SearchFailed { base, filter, only_attributes, code } => write!(f, "search in \"{}\" failed ({})", base.as_ref().unwrap_or(&"".to_owned()), get_ldap_errmsg(*code)),
+            Self::SearchFailed { base, filter, only_attributes, code } => write!(f, "search in \"{}\" (filter={:?}) (attributes={:?}) failed ({})", base.as_ref().unwrap_or(&"".to_owned()), filter, only_attributes, get_ldap_errmsg(*code)),
             Self::GetAttributeNamesFailed { dn, code } => write!(f, "fetching attribute names of \"{}\" failed ({})", dn, get_ldap_errmsg(*code)),
             Self::GetAttributeValuesFailed { dn, name, code} => write!(f, "fetching attribute values of \"{}\" in \"{}\" failed ({})", name, dn, get_ldap_errmsg(*code)),
             Self::RootDSEQueryFailed => write!(f, "rootdse query failed"),

@@ -10,6 +10,7 @@ features = [
     "alloc",
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_System_SystemServices",
     "Win32_System_Memory",
     "Win32_Foundation",
 ]
