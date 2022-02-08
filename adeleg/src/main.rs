@@ -1,14 +1,18 @@
 mod connection;
 mod utils;
 mod search;
+mod control;
 mod error;
 mod schema;
-mod security_descriptor;
+mod explicit_ace;
 use connection::{LdapConnection, LdapCredentials};
-use windows::Win32::Networking::Ldap::LDAP_PORT;
+use windows::Win32::Networking::Ldap::{LDAP_PORT, LDAP_SCOPE_BASE};
 use clap::{App, Arg};
-use crate::schema::dump_schema;
-use crate::security_descriptor::dump_security_descriptors;
+use crate::error::LdapError;
+use crate::schema::get_default_sd;
+use crate::search::{LdapSearch, LdapEntry};
+use crate::explicit_ace::get_explicit_aces;
+use crate::utils::{get_attr_sid, get_domain_sid};
 
 fn main() {
     let default_port = format!("{}", LDAP_PORT);
@@ -85,14 +89,26 @@ fn main() {
         }
     };
 
-    if let Err(e) = dump_schema(&conn) {
-        eprintln!("Error when analyzing schema: {}", e);
-        std::process::exit(1);
-    }
-
     for naming_context in &conn.naming_contexts {
+        // Default security descriptors contain domain-specific abbreviations (e.g. DA)
+        // which need to be resolved to this domain's SIDs
+        let domain_sid = get_domain_sid(&conn, naming_context);
+        let default_sd = match get_default_sd(&conn, &domain_sid) {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("Error when analyzing schema: {}", e);
+                std::process::exit(1);
+            },
+        };
+
         println!("Fetching security descriptors of naming context {}", naming_context);
-        dump_security_descriptors(&conn, naming_context);
+        let explicit_aces = match get_explicit_aces(&conn, naming_context) {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("Error when fetching security descriptors of {} : {}", naming_context, e);
+                std::process::exit(1);
+            },
+        };
     }
 
     if let Err(e) = conn.destroy() {

@@ -5,7 +5,7 @@ edition = "2018"
 authors = ["Aurélien Bordes <aurelien.bordes@ssi.gouv.fr>", "Matthieu Buffet <matthieu.buffet@ssi.gouv.fr>"]
 
 [dependencies.windows]
-version = "0.30.0"
+version = "0.32.0"
 features = [
     "alloc",
     "Win32_Security",

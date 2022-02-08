@@ -1,10 +1,11 @@
 use crate::connection::LdapConnection;
 use crate::error::LdapError;
-use windows::Win32::Networking::Ldap::{LDAP_SUCCESS, LDAPMessage, ldap_search_sW, ldap_first_entry, ldap_next_entry, ldap_memfree, ldap_get_dnW, ldap_msgfree, ldap_first_attributeW, ldap_get_values_lenW, ldap_next_attributeW};
-use windows::Win32::Foundation::PSTR;
-use std::ptr::null_mut;
+use windows::Win32::Networking::Ldap::{LDAP_PAGED_RESULT_OID_STRING, LDAP_SUCCESS, LDAPMessage, ldap_first_entry, ldap_next_entry, ldap_memfree, ldap_get_dnW, ldap_msgfree, ldap_first_attributeW, ldap_get_values_lenW, ldap_next_attributeW, ldap_search_ext_sW, ldapcontrolW, LDAP_BERVAL};
+use windows::Win32::Foundation::{PSTR, PWSTR, BOOLEAN};
+use std::ptr::{null_mut, null};
 use std::collections::HashMap;
 use crate::utils::pwstr_to_str;
+use crate::control::LdapControl;
 
 #[derive(Debug)]
 pub struct LdapSearch<'a> {
@@ -25,6 +26,7 @@ impl<'a> LdapSearch<'a> {
                scope: u32,
                filter: Option<&str>,
                only_attributes: Option<&[&str]>,
+               server_controls: Option<&[&LdapControl]>,
     ) -> Result<Self, LdapError> {
         let mut result_page: *mut LDAPMessage = null_mut();
         let mut attr_names_vecs = Vec::new();
@@ -40,15 +42,35 @@ impl<'a> LdapSearch<'a> {
         } else {
             null_mut()
         };
+        let mut server_controls_structs: Vec<ldapcontrolW> = Vec::new();
+        let mut server_controls_ptrs: Vec<*const ldapcontrolW> = Vec::new();
+        if let Some(server_controls) = server_controls {
+            for control in server_controls {
+                server_controls_structs.push(ldapcontrolW {
+                    ldctl_oid: PWSTR(control.oid.as_ptr() as *mut _),
+                    ldctl_value: LDAP_BERVAL {
+                        bv_len: control.value.len() as u32,
+                        bv_val: PSTR(control.value.as_ptr() as *mut _),
+                    },
+                    ldctl_iscritical: BOOLEAN(if control.critical { 1 } else { 0 })
+                });
+                server_controls_ptrs.push(&server_controls_structs[server_controls_structs.len() - 1] as *const _)
+            }
+        }
+        let paginate = connection.supported_controls.contains(LDAP_PAGED_RESULT_OID_STRING);
+        if paginate {
+
+        }
+        server_controls_ptrs.push(null() as *const ldapcontrolW);
         let res = unsafe {
             match (base, filter) {
-                (Some(base), Some(filter)) => ldap_search_sW(connection.handle, base, scope, filter, attr_names, 0, &mut result_page as *mut *mut LDAPMessage),
-                (Some(base), None) => ldap_search_sW(connection.handle, base, scope, None, attr_names, 0, &mut result_page as *mut *mut LDAPMessage),
-                (None, Some(filter)) => ldap_search_sW(connection.handle, None, scope, filter, attr_names, 0, &mut result_page as *mut *mut LDAPMessage),
-                (None, None) => ldap_search_sW(connection.handle, None, scope, None, attr_names, 0, &mut result_page as *mut *mut LDAPMessage),
+                (Some(base), Some(filter)) => ldap_search_ext_sW(connection.handle, base, scope, filter, attr_names, 0, server_controls_ptrs.as_ptr(), null_mut(), null_mut(), 0, &mut result_page as *mut *mut LDAPMessage),
+                (Some(base), None) => ldap_search_ext_sW(connection.handle, base, scope, None, attr_names, 0, server_controls_ptrs.as_ptr(), null_mut(), null_mut(), 0, &mut result_page as *mut *mut LDAPMessage),
+                (None, Some(filter)) => ldap_search_ext_sW(connection.handle, None, scope, filter, attr_names, 0, server_controls_ptrs.as_ptr(), null_mut(), null_mut(), 0,&mut result_page as *mut *mut LDAPMessage),
+                (None, None) => ldap_search_ext_sW(connection.handle, None, scope, None, attr_names, 0, server_controls_ptrs.as_ptr(), null_mut(), null_mut(), 0, &mut result_page as *mut *mut LDAPMessage),
             }
         };
-        if res != (LDAP_SUCCESS as u32) || result_page.is_null() {
+        if res != (LDAP_SUCCESS.0 as u32) || result_page.is_null() {
             // Some return codes indicate failure, but some results were allocated
             // and need to be freed (e.g. LDAP_PARTIAL_RESULTS or LDAP_REFERRAL)
             if !result_page.is_null() {
@@ -74,7 +96,7 @@ impl Drop for LdapSearch<'_> {
     fn drop(&mut self) {
         if !self.result_page.is_null() {
             let res = unsafe { ldap_msgfree(self.result_page) };
-            if res != (LDAP_SUCCESS as u32) && !std::thread::panicking() {
+            if res != (LDAP_SUCCESS.0 as u32) && !std::thread::panicking() {
                 panic!("Unable to free result page {:?}", self.result_page);
             }
             self.result_page = null_mut();
@@ -93,7 +115,7 @@ impl<'a> Iterator for LdapSearch<'a> {
         let dn = unsafe {
             let ptr = ldap_get_dnW(self.connection.handle, self.cursor_entry);
             if ptr.is_null() {
-                panic!("ldap_get_dnW failed");
+                return Some(Err(LdapError::GetDNFailed { code: self.connection.get_errcode() }));
             }
             let dn = pwstr_to_str(ptr.0);
             ldap_memfree(PSTR(ptr.0 as *mut u8));
@@ -132,7 +154,9 @@ impl<'a> Iterator for LdapSearch<'a> {
             }
 
             if attrs.contains_key(&name) {
-                panic!("Assertion failed: attribute name \"{}\" collision", name);
+                return Some(Err(LdapError::AttributeNamesCollision {
+                    dn, attr_name: name,
+                }));
             }
             attrs.insert(name, values);
             attr_name = unsafe { ldap_next_attributeW(self.connection.handle, self.cursor_entry, cursor_attr) };

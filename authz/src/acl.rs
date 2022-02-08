@@ -1,14 +1,14 @@
 use core::fmt::Display;
 use crate::error::AuthzError;
+use crate::utils::get_last_error;
 use windows::Win32::Security::{ACL_SIZE_INFORMATION, GetAclInformation, AclSizeInformation, ACL, GetAce, ACE_HEADER};
-use windows::Win32::Foundation::GetLastError;
 use windows::core::alloc::fmt::Formatter;
 use crate::Ace;
 use std::ptr::null;
 
 #[derive(Debug)]
 pub struct Acl {
-    aces: Vec<Ace>,
+    pub aces: Vec<Ace>,
 }
 
 impl Acl {
@@ -20,7 +20,7 @@ impl Acl {
         };
         let succeeded = unsafe { GetAclInformation(slice.as_ptr() as *mut ACL, &mut info as *mut _ as *mut _, std::mem::size_of_val(&info) as u32, AclSizeInformation) };
         if !succeeded.as_bool() {
-            return Err(AuthzError::GetAclInformationFailed { bytes: slice.to_vec(), code: unsafe { GetLastError() } });
+            return Err(AuthzError::GetAclInformationFailed { bytes: slice.to_vec(), code: get_last_error() });
         }
         let expected_size = (info.AclBytesInUse + info.AclBytesFree) as usize;
         if expected_size != slice.len() {
@@ -30,14 +30,14 @@ impl Acl {
         for ace_index in 0..info.AceCount {
             let mut ace: *const ACE_HEADER = null() as *const _;
             let succeeded = unsafe { GetAce(slice.as_ptr() as *const _, ace_index, &mut ace as *mut _ as *mut _) };
-            if !succeeded.as_bool() || (ace as usize) < (slice.as_ptr() as usize) || (ace as usize) >= (slice.as_ptr() as usize + slice.len())  {
-                return Err(AuthzError::GetAceFailed { bytes: slice.to_vec(), ace_index, code: unsafe { GetLastError() } });
+            if !succeeded.as_bool() || (ace as usize) < (slice.as_ptr() as usize) || (ace as usize + std::mem::size_of::<ACE_HEADER>()) > (slice.as_ptr() as usize + slice.len())  {
+                return Err(AuthzError::GetAceFailed { bytes: slice.to_vec(), ace_index, code: get_last_error() });
             }
             let expected_size = unsafe { (*ace).AceSize } as usize;
-            let offset = (ace as usize) - (slice.as_ptr() as usize);
-            if (offset + expected_size) > slice.len() {
+            if (ace as usize + expected_size) > (slice.as_ptr() as usize + slice.len()) {
                 return Err(AuthzError::UnexpectedAceSize { bytes: slice.to_vec(), ace_index, expected_size });
             }
+            let offset = (ace as usize) - (slice.as_ptr() as usize);
             aces.push(Ace::from_bytes(&slice[offset..offset+expected_size])?);
         }
 

@@ -2,13 +2,13 @@ use core::ptr::null_mut;
 use core::fmt::Display;
 use crate::error::AuthzError;
 use windows::Win32::Security::{IsValidSid, GetLengthSid};
-use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
+use windows::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
 use windows::Win32::Foundation::{PSID, PWSTR};
 use windows::Win32::System::Memory::LocalFree;
 use windows::core::alloc::fmt::Formatter;
-use crate::utils::pwstr_to_str;
+use crate::utils::{pwstr_to_str, get_last_error};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Sid {
     bytes: Vec<u8>,
 }
@@ -31,6 +31,17 @@ impl Sid {
         })
     }
 
+    pub fn from_str(str: &str) -> Result<Self, AuthzError> {
+        let mut psid = PSID(0);
+        let succeeded = unsafe { ConvertStringSidToSidW(str, &mut psid as *mut _) };
+        if !succeeded.as_bool() {
+            return Err(AuthzError::InvalidSidString { str: str.to_owned(), code: get_last_error() });
+        }
+        let res = unsafe { Self::from_ptr(psid) };
+        unsafe { LocalFree(psid.0); }
+        res
+    }
+
     pub(crate) unsafe fn from_ptr(sid: PSID) -> Result<Self, AuthzError> {
         let is_valid = IsValidSid(sid);
         if !is_valid.as_bool() {
@@ -38,8 +49,14 @@ impl Sid {
         }
 
         let size = GetLengthSid(sid);
+        if size == 0 || size > 1024 {
+            return Err(AuthzError::InvalidSidPointer(sid.0 as *const u8));
+        }
         let slice = std::ptr::slice_from_raw_parts(sid.0 as *const u8, size as usize);
-        Self::from_bytes(&*slice)
+        let bytes = (*slice).to_vec();
+        Ok(Sid {
+            bytes,
+        })
     }
 }
 
@@ -51,7 +68,7 @@ impl Display for Sid {
             if succeeded.as_bool() {
                 let res = pwstr_to_str(str.0);
                 LocalFree(str.0 as isize);
-                write!(f, "{}", res)
+                f.write_str(&res)
             } else {
                 write!(f, "SID={:?}", self)
             }

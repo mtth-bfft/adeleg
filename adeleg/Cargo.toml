@@ -9,7 +9,7 @@ clap = "3.0.13"
 authz = { path = "../authz" }
 
 [dependencies.windows]
-version = "0.30.0"
+version = "0.32.0"
 features = [
     "alloc",
     "Win32_Foundation",

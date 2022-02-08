@@ -3,10 +3,11 @@ use crate::error::LdapError;
 use windows::Win32::Foundation::PSTR;
 use windows::Win32::Networking::Ldap::{ldap_initW, ldap_unbind, ldap_connect, LDAP_TIMEVAL, LDAP_SUCCESS, ldap_bind_sA, ldap, LDAP_SCOPE_BASE};
 use windows::Win32::System::Rpc::{SEC_WINNT_AUTH_IDENTITY_W, SEC_WINNT_AUTH_IDENTITY_UNICODE};
-use crate::utils::{get_ldap_errcode, str_to_wstr, get_attr_str, get_attr_strs};
+use crate::utils::{get_ldap_errcode, str_to_wstr, get_attr_str, get_attr_strs, get_attr_sid};
 use crate::search::{LdapSearch, LdapEntry};
 use std::collections::HashSet;
 use std::iter::FromIterator;
+use authz::Sid;
 
 const LDAP_AUTH_NEGOTIATE: u32 = 1158;
 
@@ -19,9 +20,11 @@ pub struct LdapCredentials<'a> {
 #[derive(Debug)]
 pub struct LdapConnection {
     pub(crate) handle: *mut ldap,
-    pub(crate) capabilities: HashSet<String>,
+    pub(crate) supported_controls: HashSet<String>,
     pub(crate) naming_contexts: HashSet<String>,
+    pub(crate) root_domain_naming_context: String,
     pub(crate) schema_naming_context: String,
+    pub(crate) forest_sid: Sid,
 }
 
 impl LdapConnection {
@@ -47,7 +50,7 @@ impl LdapConnection {
         let conn = unsafe {
             ldap_connect(handle, &mut timeout)
         };
-        if conn != (LDAP_SUCCESS as u32) {
+        if conn != (LDAP_SUCCESS.0 as u32) {
             return Err(LdapError::ConnectionFailed(get_ldap_errcode()));
         }
 
@@ -77,40 +80,29 @@ impl LdapConnection {
         };
 
         let res = unsafe { ldap_bind_sA(handle, None, creds, LDAP_AUTH_NEGOTIATE) };
-        if res != LDAP_SUCCESS as u32 {
+        if res != LDAP_SUCCESS.0 as u32 {
             return Err(LdapError::BindFailed(get_ldap_errcode()));
         }
 
         let mut conn = Self {
             handle,
-            capabilities: HashSet::new(),
+            forest_sid: Sid::from_str("S-1-2-3").unwrap(), // placeholder until we fetch the actual value
+            supported_controls: HashSet::new(),
             naming_contexts: HashSet::new(),
+            root_domain_naming_context: String::new(),
             schema_naming_context: String::new(),
         };
 
-        let search = LdapSearch::new(&conn, None, LDAP_SCOPE_BASE, None, Some(&["supportedCapabilities", "schemaNamingContext", "namingContexts"]))?;
+        let search = LdapSearch::new(&conn, None, LDAP_SCOPE_BASE, None, Some(&["supportedControl", "schemaNamingContext", "namingContexts", "rootDomainNamingContext"]), None)?;
         let rootdse = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
-        let rootdse = if rootdse.len() != 1 {
-            return Err(LdapError::RootDSEQueryFailed);
-        } else {
-            &rootdse[0].attrs
-        };
+        conn.naming_contexts = HashSet::from_iter(get_attr_strs(&rootdse, "(rootDSE)", "namingcontexts")?.into_iter());
+        conn.schema_naming_context = get_attr_str(&rootdse, "(rootDSE)", "schemanamingcontext")?;
+        conn.root_domain_naming_context = get_attr_str(&rootdse, "(rootDSE)", "rootdomainnamingcontext")?;
+        conn.supported_controls = HashSet::from_iter(get_attr_strs(&rootdse, "(rootDSE)", "supportedcontrol")?.into_iter());
 
-        if let Some(naming_contexts) = get_attr_strs(rootdse, "namingcontexts") {
-            conn.naming_contexts = HashSet::from_iter(naming_contexts.into_iter());
-        } else {
-            return Err(LdapError::RootDSEAttributeMissing);
-        }
-
-        if let Some(schema_naming_context) = get_attr_str(rootdse, "schemanamingcontext") {
-            conn.schema_naming_context = schema_naming_context;
-        } else {
-            return Err(LdapError::RootDSEAttributeMissing);
-        }
-
-        let capabilities = get_attr_strs(rootdse, "supportedcapabilities");
-        let capabilities = HashSet::from_iter(capabilities.unwrap().into_iter());
-        conn.capabilities = capabilities;
+        let search = LdapSearch::new(&conn, Some(&conn.root_domain_naming_context), LDAP_SCOPE_BASE, None, Some(&["objectSid"]), None)?;
+        let root_domain = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
+        conn.forest_sid = get_attr_sid(&root_domain, &conn.root_domain_naming_context, "objectsid")?;
 
         Ok(conn)
     }
@@ -121,7 +113,7 @@ impl LdapConnection {
 
     pub fn destroy(&self) -> Result<(), LdapError> {
         let res = unsafe { ldap_unbind(self.handle) };
-                if res != LDAP_SUCCESS as u32 {
+                if res != LDAP_SUCCESS.0 as u32 {
             return Err(LdapError::UnbindFailed(get_ldap_errcode()));
         }
         Ok(())

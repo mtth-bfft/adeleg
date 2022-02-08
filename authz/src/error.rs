@@ -3,11 +3,14 @@ use windows::core::alloc::fmt::Formatter;
 
 #[derive(Debug)]
 pub enum AuthzError {
-    InvalidSecurityDescriptor {
-        bytes: Vec<u8>,
-    },
+    InvalidSecurityDescriptor(Vec<u8>),
+    InvalidStringSecurityDescriptor { str: String, code: u32 },
     InvalidSidBytes(Vec<u8>),
     InvalidSidPointer(*const u8),
+    InvalidSidString {
+        str: String,
+        code: u32,
+    },
     UnexpectedSecurityDescriptorSize {
         bytes: Vec<u8>,
         expected_size: usize,
@@ -67,9 +70,11 @@ pub enum AuthzError {
 impl Display for AuthzError {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::InvalidSecurityDescriptor { bytes} => write!(f, "invalid security descriptor {:?}", bytes),
+            Self::InvalidSecurityDescriptor(bytes) => write!(f, "invalid security descriptor {:?}", bytes),
+            Self::InvalidStringSecurityDescriptor { str, code } => write!(f, "invalid security descriptor string \"{}\" (code {})", str, code),
             Self::InvalidSidBytes(bytes) => write!(f, "invalid SID {:?}", bytes),
             Self::InvalidSidPointer(ptr) => write!(f, "invalid SID {:?}", ptr),
+            Self::InvalidSidString { str, code } => write!(f, "invalid SID string \"{}\" (code {})", str, code),
             Self::UnexpectedSecurityDescriptorSize { bytes, expected_size} if *expected_size > bytes.len() => write!(f, "{} leftover bytes after security descriptor {:?}", expected_size - bytes.len(), bytes),
             Self::UnexpectedSecurityDescriptorSize { bytes, expected_size} => write!(f, "{} bytes truncated from security descriptor {:?}", bytes.len() - expected_size, bytes),
             Self::UnexpectedSidSize { bytes, expected_size} if *expected_size > bytes.len() => write!(f, "{} leftover bytes after SID {:?}", expected_size - bytes.len(), bytes),
