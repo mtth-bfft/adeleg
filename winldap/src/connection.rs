@@ -3,11 +3,10 @@ use crate::error::LdapError;
 use windows::Win32::Foundation::PSTR;
 use windows::Win32::Networking::Ldap::{ldap_initW, ldap_unbind, ldap_connect, LDAP_TIMEVAL, LDAP_SUCCESS, ldap_bind_sA, ldap, LDAP_SCOPE_BASE};
 use windows::Win32::System::Rpc::{SEC_WINNT_AUTH_IDENTITY_W, SEC_WINNT_AUTH_IDENTITY_UNICODE};
-use crate::utils::{get_ldap_errcode, str_to_wstr, get_attr_str, get_attr_strs, get_attr_sid};
+use crate::utils::{get_ldap_errcode, str_to_wstr, get_attr_str, get_attr_strs};
 use crate::search::{LdapSearch, LdapEntry};
 use std::collections::HashSet;
 use std::iter::FromIterator;
-use authz::Sid;
 
 const LDAP_AUTH_NEGOTIATE: u32 = 1158;
 
@@ -21,10 +20,9 @@ pub struct LdapCredentials<'a> {
 pub struct LdapConnection {
     pub(crate) handle: *mut ldap,
     pub(crate) supported_controls: HashSet<String>,
-    pub(crate) naming_contexts: HashSet<String>,
+    pub(crate) naming_contexts: Vec<String>,
     pub(crate) root_domain_naming_context: String,
     pub(crate) schema_naming_context: String,
-    pub(crate) forest_sid: Sid,
 }
 
 impl LdapConnection {
@@ -86,29 +84,40 @@ impl LdapConnection {
 
         let mut conn = Self {
             handle,
-            forest_sid: Sid::from_str("S-1-2-3").unwrap(), // placeholder until we fetch the actual value
             supported_controls: HashSet::new(),
-            naming_contexts: HashSet::new(),
+            naming_contexts: Vec::new(),
             root_domain_naming_context: String::new(),
             schema_naming_context: String::new(),
         };
 
         let search = LdapSearch::new(&conn, None, LDAP_SCOPE_BASE, None, Some(&["supportedControl", "schemaNamingContext", "namingContexts", "rootDomainNamingContext"]), &[]);
         let rootdse = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
-        conn.naming_contexts = HashSet::from_iter(get_attr_strs(&rootdse, "(rootDSE)", "namingcontexts")?.into_iter());
+        conn.naming_contexts = get_attr_strs(&rootdse, "(rootDSE)", "namingcontexts")?;
         conn.schema_naming_context = get_attr_str(&rootdse, "(rootDSE)", "schemanamingcontext")?;
         conn.root_domain_naming_context = get_attr_str(&rootdse, "(rootDSE)", "rootdomainnamingcontext")?;
         conn.supported_controls = HashSet::from_iter(get_attr_strs(&rootdse, "(rootDSE)", "supportedcontrol")?.into_iter());
-
-        let search = LdapSearch::new(&conn, Some(&conn.root_domain_naming_context), LDAP_SCOPE_BASE, None, Some(&["objectSid"]), &[]);
-        let root_domain = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
-        conn.forest_sid = get_attr_sid(&root_domain, &conn.root_domain_naming_context, "objectsid")?;
 
         Ok(conn)
     }
 
     pub fn get_errcode(&self) -> u32 {
         unsafe { (*self.handle).ld_errno }
+    }
+
+    pub fn get_naming_contexts(&self) -> &[String] {
+        &self.naming_contexts[..]
+    }
+
+    pub fn get_root_domain_naming_context(&self) -> &str {
+        self.root_domain_naming_context.as_str()
+    }
+
+    pub fn get_schema_naming_context(&self) -> &str {
+        self.schema_naming_context.as_str()
+    }
+
+    pub fn supports_control(&self, oid: &str) -> bool {
+        self.supported_controls.contains(oid)
     }
 
     pub fn destroy(&self) -> Result<(), LdapError> {

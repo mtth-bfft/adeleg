@@ -1,9 +1,10 @@
 use crate::utils::get_attr_sd;
-use crate::{connection::LdapConnection, utils::get_attr_strs};
-use crate::error::LdapError;
-use crate::search::LdapSearch;
+use winldap::connection::LdapConnection;
+use winldap::utils::get_attr_strs;
+use winldap::error::LdapError;
+use winldap::search::LdapSearch;
 use windows::Win32::Networking::Ldap::{LDAP_SCOPE_SUBTREE, LDAP_SERVER_SD_FLAGS_OID};
-use crate::control::{LdapControl, BerVal, BerEncodable};
+use winldap::control::{LdapControl, BerVal, BerEncodable};
 use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION};
 
 pub(crate) fn get_explicit_aces(conn: &LdapConnection, naming_context: &str) -> Result<(), LdapError> {

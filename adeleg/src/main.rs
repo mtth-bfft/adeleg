@@ -1,16 +1,12 @@
-mod connection;
 mod utils;
-mod search;
-mod control;
-mod error;
 mod schema;
 mod explicit_ace;
-use connection::{LdapConnection, LdapCredentials};
+use winldap::connection::{LdapConnection, LdapCredentials};
 use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
 use crate::schema::get_default_sd;
 use crate::explicit_ace::get_explicit_aces;
-use crate::utils::get_domain_sid;
+use crate::utils::{get_domain_sid, get_forest_sid};
 
 fn main() {
     let default_port = format!("{}", LDAP_PORT);
@@ -87,11 +83,19 @@ fn main() {
         }
     };
 
-    for naming_context in &conn.naming_contexts {
+    let forest_sid = match get_forest_sid(&conn) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Unable to fetch forest SID: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    for naming_context in conn.get_naming_contexts() {
         // Default security descriptors contain domain-specific abbreviations (e.g. DA)
         // which need to be resolved to this domain's SIDs
-        let domain_sid = get_domain_sid(&conn, naming_context);
-        let default_sd = match get_default_sd(&conn, &domain_sid) {
+        let domain_sid = get_domain_sid(&conn, naming_context, &forest_sid);
+        let default_sd = match get_default_sd(&conn, &forest_sid, &domain_sid) {
             Ok(h) => h,
             Err(e) => {
                 eprintln!("Error when analyzing schema: {}", e);

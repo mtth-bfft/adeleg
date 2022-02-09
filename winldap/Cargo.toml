@@ -1,21 +1,14 @@
 [package]
-name = "adeleg"
+name = "winldap"
 version = "0.1.0"
 edition = "2018"
 authors = ["Aurélien Bordes <aurelien.bordes@ssi.gouv.fr>", "Matthieu Buffet <matthieu.buffet@ssi.gouv.fr>"]
-
-[dependencies]
-clap = "3.0.13"
-authz = { path = "../authz" }
-winldap = { path = "../winldap" }
 
 [dependencies.windows]
 version = "0.32.0"
 features = [
     "alloc",
-    "Win32_Security",
-    "Win32_Security_Authorization",
-    "Win32_System_SystemServices",
-    "Win32_System_Memory",
     "Win32_Foundation",
+    "Win32_Networking_Ldap",
+    "Win32_System_Rpc",
 ]
