@@ -117,6 +117,7 @@ impl BerVal {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct LdapControl {
     pub(crate) oid: Vec<u16>,
     pub(crate) value: Vec<u8>,

@@ -6,13 +6,11 @@ mod error;
 mod schema;
 mod explicit_ace;
 use connection::{LdapConnection, LdapCredentials};
-use windows::Win32::Networking::Ldap::{LDAP_PORT, LDAP_SCOPE_BASE};
+use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
-use crate::error::LdapError;
 use crate::schema::get_default_sd;
-use crate::search::{LdapSearch, LdapEntry};
 use crate::explicit_ace::get_explicit_aces;
-use crate::utils::{get_attr_sid, get_domain_sid};
+use crate::utils::get_domain_sid;
 
 fn main() {
     let default_port = format!("{}", LDAP_PORT);

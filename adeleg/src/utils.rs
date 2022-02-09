@@ -1,15 +1,9 @@
 use core::borrow::Borrow;
-use windows::Win32::Foundation::GetLastError;
 use windows::Win32::Networking::Ldap::{LdapGetLastError, ldap_err2stringW, LDAP_SCOPE_BASE};
-use std::collections::HashMap;
 use authz::{Sid, SecurityDescriptor};
 use crate::connection::LdapConnection;
-use crate::search::{LdapEntry};
+use crate::search::{LdapSearch, LdapEntry};
 use crate::error::LdapError;
-
-pub(crate) fn get_last_error() -> u32 {
-    unsafe { GetLastError().0 }
-}
 
 pub(crate) fn str_to_wstr(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -116,10 +110,7 @@ pub(crate) fn get_attr_sd<T: Borrow<LdapEntry>>(search_results: &[T], base: &str
 }
 
 pub(crate) fn get_domain_sid(conn: &LdapConnection, naming_context: &str) -> Sid {
-    let search = match crate::search::LdapSearch::new(&conn, Some(naming_context), LDAP_SCOPE_BASE, None, Some(&["objectSid"]), None) {
-        Ok(s) => s,
-        _ => return conn.forest_sid.clone(),
-    };
+    let search = LdapSearch::new(&conn, Some(naming_context), LDAP_SCOPE_BASE, None, Some(&["objectSid"]), &[]);
     let domain = match search.collect::<Result<Vec<LdapEntry>, LdapError>>() {
         Ok(v) => v,
         _ => return conn.forest_sid.clone(),

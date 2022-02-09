@@ -45,6 +45,21 @@ pub enum LdapError {
         val1: String,
         val2: String,
     },
+    CreatePageControlFailed {
+        code: u32,
+    },
+    ParseResultFailed {
+        code: u32,
+    },
+    ParsePageControlFailed {
+        code: u32,
+    },
+    GetFirstEntryFailed {
+        code: u32,
+    },
+    GetNextEntryFailed {
+        code: u32,
+    },
     GetDNFailed {
         code: u32,
     },
@@ -68,6 +83,11 @@ impl Display for LdapError {
             Self::RequiredObjectCollision { dn } => write!(f, "unexpected object \"{}\" collision", dn),
             Self::RequiredObjectMissing { dn } => write!(f, "object \"{}\" not found, cannot proceed", dn),
             Self::AttributeValuesCollision { dn, name, val1, val2 } => write!(f, "unexpected value collision for {} on {} ({} / {})", name, dn, val1, val2),
+            Self::CreatePageControlFailed { code } => write!(f, "could not create paging control, {}", get_ldap_errmsg(*code)),
+            Self::ParseResultFailed { code } => write!(f, "could not parse results, {}", get_ldap_errmsg(*code)),
+            Self::ParsePageControlFailed { code } => write!(f, "could not parse paging response, {}", get_ldap_errmsg(*code)),
+            Self::GetFirstEntryFailed { code } => write!(f, "could not fetch a first result entry, {}", get_ldap_errmsg(*code)),
+            Self::GetNextEntryFailed { code } => write!(f, "could not fetch the next result entry, {}", get_ldap_errmsg(*code)),
         }
     }
 }

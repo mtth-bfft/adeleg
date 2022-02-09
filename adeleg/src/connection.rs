@@ -93,14 +93,14 @@ impl LdapConnection {
             schema_naming_context: String::new(),
         };
 
-        let search = LdapSearch::new(&conn, None, LDAP_SCOPE_BASE, None, Some(&["supportedControl", "schemaNamingContext", "namingContexts", "rootDomainNamingContext"]), None)?;
+        let search = LdapSearch::new(&conn, None, LDAP_SCOPE_BASE, None, Some(&["supportedControl", "schemaNamingContext", "namingContexts", "rootDomainNamingContext"]), &[]);
         let rootdse = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
         conn.naming_contexts = HashSet::from_iter(get_attr_strs(&rootdse, "(rootDSE)", "namingcontexts")?.into_iter());
         conn.schema_naming_context = get_attr_str(&rootdse, "(rootDSE)", "schemanamingcontext")?;
         conn.root_domain_naming_context = get_attr_str(&rootdse, "(rootDSE)", "rootdomainnamingcontext")?;
         conn.supported_controls = HashSet::from_iter(get_attr_strs(&rootdse, "(rootDSE)", "supportedcontrol")?.into_iter());
 
-        let search = LdapSearch::new(&conn, Some(&conn.root_domain_naming_context), LDAP_SCOPE_BASE, None, Some(&["objectSid"]), None)?;
+        let search = LdapSearch::new(&conn, Some(&conn.root_domain_naming_context), LDAP_SCOPE_BASE, None, Some(&["objectSid"]), &[]);
         let root_domain = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
         conn.forest_sid = get_attr_sid(&root_domain, &conn.root_domain_naming_context, "objectsid")?;
 

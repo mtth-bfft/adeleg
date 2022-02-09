@@ -1,6 +1,6 @@
 use crate::connection::LdapConnection;
 use crate::error::LdapError;
-use crate::search::{LdapSearch, LdapEntry};
+use crate::search::LdapSearch;
 use windows::Win32::Networking::Ldap::LDAP_SCOPE_SUBTREE;
 use authz::{SecurityDescriptor, Sid};
 use std::collections::HashMap;
@@ -12,7 +12,7 @@ pub(crate) fn get_default_sd(conn: &LdapConnection, domain_sid: &Sid) -> Result<
                                  Some(&[
                                      "defaultSecurityDescriptor",
                                      "objectClass",
-                                 ]), None)?;
+                                 ]), &[]);
     let mut default_sd = HashMap::new();
     for entry in search {
         let entry = entry?;
