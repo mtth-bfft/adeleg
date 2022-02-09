@@ -1,11 +1,11 @@
 mod utils;
 mod schema;
-mod explicit_ace;
+mod delegations;
 use winldap::connection::{LdapConnection, LdapCredentials};
 use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
 use crate::schema::get_default_sd;
-use crate::explicit_ace::get_explicit_aces;
+use crate::delegations::get_explicit_delegations;
 use crate::utils::{get_domain_sid, get_forest_sid};
 
 fn main() {
@@ -104,7 +104,7 @@ fn main() {
         };
 
         println!("Fetching security descriptors of naming context {}", naming_context);
-        let explicit_aces = match get_explicit_aces(&conn, naming_context) {
+        let delegations = match get_explicit_delegations(&conn, naming_context, &default_sd) {
             Ok(h) => h,
             Err(e) => {
                 eprintln!("Error when fetching security descriptors of {} : {}", naming_context, e);

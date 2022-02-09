@@ -1,3 +1,5 @@
+use windows::Win32::Security::GetSidSubAuthority;
+use windows::Win32::Security::GetSidSubAuthorityCount;
 use core::ptr::null_mut;
 use core::fmt::Display;
 use crate::error::AuthzError;
@@ -8,7 +10,7 @@ use windows::Win32::System::Memory::LocalFree;
 use windows::core::alloc::fmt::Formatter;
 use crate::utils::{pwstr_to_str, get_last_error};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Sid {
     bytes: Vec<u8>,
 }
@@ -57,6 +59,13 @@ impl Sid {
         Ok(Sid {
             bytes,
         })
+    }
+
+    pub fn get_rid(&self) -> u32 {
+        unsafe {
+            let sub_auth_count =  *(GetSidSubAuthorityCount(PSID(self.bytes.as_ptr() as isize)));
+            *(GetSidSubAuthority(PSID(self.bytes.as_ptr() as isize), (sub_auth_count - 1).into()))
+        }
     }
 }
 
