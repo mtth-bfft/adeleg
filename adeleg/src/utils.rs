@@ -1,3 +1,7 @@
+use windows::Win32::Security::DACL_SECURITY_INFORMATION;
+use winldap::control::{BerVal, BerEncodable};
+use windows::Win32::Networking::Ldap::LDAP_SERVER_SD_FLAGS_OID;
+use winldap::control::LdapControl;
 use core::borrow::Borrow;
 use authz::{Sid, SecurityDescriptor};
 use winldap::connection::LdapConnection;
@@ -67,4 +71,27 @@ pub(crate) fn get_domain_sid(conn: &LdapConnection, naming_context: &str, forest
         _ => return forest_sid.clone(),
     };
     sid
+}
+
+pub(crate) fn get_adminsdholder_sd(conn: &LdapConnection) -> Result<SecurityDescriptor, LdapError> {
+    for nc in conn.get_naming_contexts() {
+        let dn = format!("CN=AdminSDHolder,CN=System,{}", nc);
+        let mut sd_control_val = BerVal::new();
+        sd_control_val.append(BerEncodable::Sequence(vec![BerEncodable::Integer((DACL_SECURITY_INFORMATION.0).into())]));
+            let sd_control = LdapControl::new(
+            LDAP_SERVER_SD_FLAGS_OID,
+            &sd_control_val,
+            true)?;
+        let search = LdapSearch::new(&conn, Some(&dn),LDAP_SCOPE_BASE,
+        Some("(objectClass=*)"),
+        Some(&["nTSecurityDescriptor"]), &[&sd_control]);
+        if let Ok(adminsdholder) = search.collect::<Result<Vec<LdapEntry>, LdapError>>() {
+            if let Ok(sd) = get_attr_sd(&adminsdholder[..],  &dn, "ntsecuritydescriptor") {
+                return Ok(sd);
+            }
+        }
+    }
+    Err(LdapError::RequiredObjectMissing {
+        dn: "CN=AdminSDHolder,CN=System,*".to_owned()
+    })
 }

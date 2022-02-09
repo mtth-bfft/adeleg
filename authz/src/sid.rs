@@ -1,3 +1,4 @@
+use core::fmt::Debug;
 use windows::Win32::Security::GetSidSubAuthority;
 use windows::Win32::Security::GetSidSubAuthorityCount;
 use core::ptr::null_mut;
@@ -10,7 +11,7 @@ use windows::Win32::System::Memory::LocalFree;
 use windows::core::alloc::fmt::Formatter;
 use crate::utils::{pwstr_to_str, get_last_error};
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Clone, Eq, PartialEq, Hash)]
 pub struct Sid {
     bytes: Vec<u8>,
 }
@@ -82,5 +83,11 @@ impl Display for Sid {
                 write!(f, "SID={:?}", self)
             }
         }
+    }
+}
+
+impl Debug for Sid {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
+        f.write_str(&self.to_string())
     }
 }

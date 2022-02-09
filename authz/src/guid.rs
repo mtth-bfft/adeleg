@@ -4,6 +4,7 @@ use windows::core::GUID;
 
 // Simple in-between type exposed in our API, so that our
 // dependency to windows-rs is transparent to our users
+#[derive(PartialEq, Eq, Hash, Copy, Clone)]
 pub struct Guid {
     data1: u32,
     data2: u16,
@@ -38,7 +39,7 @@ impl Display for Guid {
 }
 
 impl Debug for Guid {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        core::fmt::Display::fmt(self, f)
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
+        f.write_str(&self.to_string())
     }
 }

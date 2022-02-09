@@ -1,7 +1,7 @@
 use core::ptr::null_mut;
 use crate::error::LdapError;
-use windows::Win32::Foundation::PSTR;
-use windows::Win32::Networking::Ldap::{ldap_initW, ldap_unbind, ldap_connect, LDAP_TIMEVAL, LDAP_SUCCESS, ldap_bind_sA, ldap, LDAP_SCOPE_BASE};
+use windows::Win32::Foundation::PWSTR;
+use windows::Win32::Networking::Ldap::{ldap_initW, ldap_unbind, ldap_connect, LDAP_TIMEVAL, LDAP_SUCCESS, ldap_bind_sW, ldap, LDAP_SCOPE_BASE};
 use windows::Win32::System::Rpc::{SEC_WINNT_AUTH_IDENTITY_W, SEC_WINNT_AUTH_IDENTITY_UNICODE};
 use crate::utils::{get_ldap_errcode, str_to_wstr, get_attr_str, get_attr_strs};
 use crate::search::{LdapSearch, LdapEntry};
@@ -55,7 +55,7 @@ impl LdapConnection {
         let mut domain_wstr;
         let mut username_wstr;
         let mut password_wstr;
-        let creds= if let Some(creds) = credentials {
+        let creds = if let Some(creds) = credentials {
             domain_wstr = str_to_wstr(creds.domain);
             username_wstr = str_to_wstr(creds.username);
             password_wstr = str_to_wstr(creds.password);
@@ -71,14 +71,14 @@ impl LdapConnection {
         } else {
             None
         };
-        let creds = if let Some(creds) = creds {
-            PSTR(&creds as *const _ as *mut _)
+        let creds_ptr = if let Some(c) = &creds {
+            PWSTR(c as *const _ as *mut _)
         } else {
-            PSTR(null_mut())
+            PWSTR(null_mut())
         };
 
-        let res = unsafe { ldap_bind_sA(handle, None, creds, LDAP_AUTH_NEGOTIATE) };
-        if res != LDAP_SUCCESS.0 as u32 {
+        let res = unsafe { ldap_bind_sW(handle, None, creds_ptr, LDAP_AUTH_NEGOTIATE) };
+        if res != (LDAP_SUCCESS.0 as u32) {
             return Err(LdapError::BindFailed(get_ldap_errcode()));
         }
 

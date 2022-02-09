@@ -4,13 +4,13 @@ use windows::Win32::System::SystemServices::{ACCESS_ALLOWED_ACE_TYPE, ACCESS_ALL
 use crate::{Sid, Guid};
 use windows::Win32::Foundation::PSID;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Ace {
     pub flags: u8,
     pub type_specific: AceType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum AceType {
     // Discretionnary access ACEs
     AccessAllowed {
@@ -316,6 +316,24 @@ impl Ace {
             AceType::AuditObject { mask, .. } => *mask,
             AceType::AuditCallbackObject { mask, .. } => *mask,
             AceType::MandatoryLabel { mask, .. } => *mask,
+        }
+    }
+
+    pub fn grants_access(&self) -> bool {
+        match &self.type_specific {
+            AceType::AccessAllowed { .. } => true,
+            AceType::AccessAllowedObject { .. } => true,
+            AceType::AccessAllowedCallback { .. } => true,
+            AceType::AccessAllowedCallbackObject { .. } => true,
+            AceType::AccessDenied { .. } => false,
+            AceType::AccessDeniedObject { .. }=> false,
+            AceType::AccessDeniedCallback { .. } => false,
+            AceType::AccessDeniedCallbackObject { .. } => false,
+            AceType::Audit { .. } => false,
+            AceType::AuditCallback { .. } => false,
+            AceType::AuditObject { .. } => false,
+            AceType::AuditCallbackObject { .. } => false,
+            AceType::MandatoryLabel { .. } => false,
         }
     }
 }
