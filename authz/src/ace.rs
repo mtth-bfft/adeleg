@@ -1,3 +1,4 @@
+use core::fmt::Display;
 use crate::error::AuthzError;
 use windows::Win32::Security::{ACE_HEADER, ACCESS_ALLOWED_ACE, ACCESS_DENIED_ACE, ACCESS_ALLOWED_CALLBACK_ACE, ACCESS_ALLOWED_CALLBACK_OBJECT_ACE, ACE_OBJECT_TYPE_PRESENT, ACE_INHERITED_OBJECT_TYPE_PRESENT, ACCESS_DENIED_CALLBACK_ACE, ACCESS_DENIED_CALLBACK_OBJECT_ACE, ACCESS_ALLOWED_OBJECT_ACE, ACCESS_DENIED_OBJECT_ACE, SYSTEM_AUDIT_ACE, SYSTEM_AUDIT_OBJECT_ACE, SYSTEM_AUDIT_CALLBACK_OBJECT_ACE, SYSTEM_AUDIT_CALLBACK_ACE, SYSTEM_MANDATORY_LABEL_ACE, INHERITED_ACE};
 use windows::Win32::System::SystemServices::{ACCESS_ALLOWED_ACE_TYPE, ACCESS_ALLOWED_OBJECT_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_ACE_TYPE, ACCESS_DENIED_ACE_TYPE, ACCESS_DENIED_OBJECT_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE, ACCESS_DENIED_CALLBACK_ACE_TYPE, ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE, SYSTEM_AUDIT_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_ACE_TYPE, SYSTEM_AUDIT_OBJECT_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE, SYSTEM_MANDATORY_LABEL_ACE_TYPE};
@@ -335,5 +336,18 @@ impl Ace {
             AceType::AuditCallbackObject { .. } => false,
             AceType::MandatoryLabel { .. } => false,
         }
+    }
+}
+
+impl Display for Ace {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
+        write!(f, "{} access mask 0x{:X}", self.get_trustee(), self.get_mask())?;
+        if let AceType::AccessAllowedObject { object_type: Some(guid), .. } = &self.type_specific {
+            write!(f, " obj_type={}", guid)?;
+        }
+        if let AceType::AccessAllowedObject { inherited_object_type: Some(guid), .. } = &self.type_specific {
+            write!(f, " inh_obj_type={}", guid)?;
+        }
+        Ok(())
     }
 }

@@ -68,6 +68,11 @@ impl Sid {
             *(GetSidSubAuthority(PSID(self.bytes.as_ptr() as isize), (sub_auth_count - 1).into()))
         }
     }
+
+    pub fn with_rid(&self, rid: u32) -> Self {
+        let s = format!("{}-{}", self, rid);
+        Self::from_str(&s).expect("invalid RID concatenation")
+    }
 }
 
 impl Display for Sid {

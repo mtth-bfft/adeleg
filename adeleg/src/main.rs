@@ -4,9 +4,9 @@ mod delegations;
 use winldap::connection::{LdapConnection, LdapCredentials};
 use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
-use crate::schema::get_default_sd;
+use crate::schema::Schema;
 use crate::delegations::get_explicit_delegations;
-use crate::utils::{get_domain_sid, get_forest_sid, get_adminsdholder_sd};
+use crate::utils::{get_forest_sid, get_adminsdholder_sd};
 
 fn main() {
     let default_port = format!("{}", LDAP_PORT);
@@ -99,20 +99,17 @@ fn main() {
         }
     };
 
-    for naming_context in conn.get_naming_contexts() {
-        // Default security descriptors contain domain-specific abbreviations (e.g. DA)
-        // which need to be resolved to this domain's SIDs
-        let domain_sid = get_domain_sid(&conn, naming_context, &forest_sid);
-        let default_sd = match get_default_sd(&conn, &forest_sid, &domain_sid) {
-            Ok(h) => h,
-            Err(e) => {
-                eprintln!("Error when analyzing schema: {}", e);
-                std::process::exit(1);
-            },
-        };
+    let schema = match Schema::query(&conn) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Unable to fetch required information from schema: {}", e);
+            std::process::exit(1);
+        }
+    };
 
+    for naming_context in conn.get_naming_contexts() {
         println!("Fetching security descriptors of naming context {}", naming_context);
-        let delegations = match get_explicit_delegations(&conn, naming_context, &default_sd, &adminsdholder_sd) {
+        let delegations = match get_explicit_delegations(&conn, naming_context, &forest_sid, &schema, &adminsdholder_sd) {
             Ok(h) => h,
             Err(e) => {
                 eprintln!("Error when fetching security descriptors of {} : {}", naming_context, e);

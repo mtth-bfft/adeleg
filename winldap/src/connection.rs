@@ -23,6 +23,7 @@ pub struct LdapConnection {
     pub(crate) naming_contexts: Vec<String>,
     pub(crate) root_domain_naming_context: String,
     pub(crate) schema_naming_context: String,
+    pub(crate) configuration_naming_context: String,
 }
 
 impl LdapConnection {
@@ -87,13 +88,15 @@ impl LdapConnection {
             supported_controls: HashSet::new(),
             naming_contexts: Vec::new(),
             root_domain_naming_context: String::new(),
+            configuration_naming_context: String::new(),
             schema_naming_context: String::new(),
         };
 
-        let search = LdapSearch::new(&conn, None, LDAP_SCOPE_BASE, None, Some(&["supportedControl", "schemaNamingContext", "namingContexts", "rootDomainNamingContext"]), &[]);
+        let search = LdapSearch::new(&conn, None, LDAP_SCOPE_BASE, None, Some(&["supportedControl", "schemaNamingContext", "namingContexts", "configurationNamingContext", "rootDomainNamingContext"]), &[]);
         let rootdse = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
         conn.naming_contexts = get_attr_strs(&rootdse, "(rootDSE)", "namingcontexts")?;
         conn.schema_naming_context = get_attr_str(&rootdse, "(rootDSE)", "schemanamingcontext")?;
+        conn.configuration_naming_context = get_attr_str(&rootdse, "(rootDSE)", "configurationnamingcontext")?;
         conn.root_domain_naming_context = get_attr_str(&rootdse, "(rootDSE)", "rootdomainnamingcontext")?;
         conn.supported_controls = HashSet::from_iter(get_attr_strs(&rootdse, "(rootDSE)", "supportedcontrol")?.into_iter());
 
@@ -114,6 +117,10 @@ impl LdapConnection {
 
     pub fn get_schema_naming_context(&self) -> &str {
         self.schema_naming_context.as_str()
+    }
+
+    pub fn get_configuration_naming_context(&self) -> &str {
+        self.configuration_naming_context.as_str()
     }
 
     pub fn supports_control(&self, oid: &str) -> bool {
