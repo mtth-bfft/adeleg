@@ -20,6 +20,8 @@ pub struct Schema {
     pub(crate) attribute_guids: HashMap<Guid, String>,
     // Mapping from property set GUIDs to property set names
     pub(crate) property_set_names: HashMap<Guid, String>,
+    // Mapping from control access GUIDs to control access names
+    pub(crate) control_access_names: HashMap<Guid, String>,
 }
 
 impl Schema {
@@ -28,6 +30,7 @@ impl Schema {
         let mut class_default_sd = HashMap::new();
         let mut attribute_guids = HashMap::new();
         let mut property_set_names = HashMap::new();
+        let mut control_access_names = HashMap::new();
 
         let forest_sid = get_forest_sid(conn)?;
         let domain_sids = conn.get_naming_contexts().iter().map(|nc| get_domain_sid(&conn, nc).unwrap_or(forest_sid.clone())).collect::<HashSet<Sid>>();
@@ -69,7 +72,7 @@ impl Schema {
             attribute_guids.insert(guid, name);
         }
 
-        // Fetch property sets
+        // Fetch property sets (validAccesses = READ_PROP | WRITE_PROP)
         let search = LdapSearch::new(&conn, Some(conn.get_configuration_naming_context()), LDAP_SCOPE_SUBTREE,
                                     Some("(&(objectClass=controlAccessRight)(validAccesses=48)(rightsGuid=*))"),
                                     Some(&[
@@ -84,6 +87,22 @@ impl Schema {
             property_set_names.insert(guid, name);
         }
 
-        Ok(Self { class_guids, class_default_sd, attribute_guids, property_set_names })
+        // Fetch control access rights (validAccesses = CONTROL_ACCESS)
+        let search = LdapSearch::new(&conn, Some(conn.get_configuration_naming_context()), LDAP_SCOPE_SUBTREE,
+                                    Some("(&(objectClass=controlAccessRight)(validAccesses=256)(rightsGuid=*))"),
+                                    Some(&[
+                                        "rightsGuid",
+                                        "displayName",
+                                    ]), &[]);
+        for entry in search {
+            let entry = entry?;
+            let guid = get_attr_str(&[&entry], &entry.dn, "rightsguid")?;
+            let guid = Guid::try_from(guid.as_str()).expect("unable to parse propertyset rightsGuid as GUID");
+            let name = get_attr_str(&[&entry], &entry.dn, "displayname")?;
+            control_access_names.insert(guid, name);
+        }
+
+
+        Ok(Self { class_guids, class_default_sd, attribute_guids, property_set_names, control_access_names })
     }
 }

@@ -8,7 +8,7 @@ use winldap::connection::LdapConnection;
 use winldap::utils::get_attr_strs;
 use winldap::error::LdapError;
 use winldap::search::LdapSearch;
-use windows::Win32::Networking::{Ldap::{LDAP_SCOPE_SUBTREE, LDAP_SERVER_SD_FLAGS_OID}, ActiveDirectory::{ADS_RIGHT_READ_CONTROL, ADS_RIGHT_ACTRL_DS_LIST, ADS_RIGHT_DS_LIST_OBJECT, ADS_RIGHT_DS_READ_PROP}};
+use windows::Win32::Networking::{Ldap::{LDAP_SCOPE_SUBTREE, LDAP_SERVER_SD_FLAGS_OID}, ActiveDirectory::{ADS_RIGHT_READ_CONTROL, ADS_RIGHT_ACTRL_DS_LIST, ADS_RIGHT_DS_LIST_OBJECT, ADS_RIGHT_DS_READ_PROP, ADS_RIGHT_DS_CONTROL_ACCESS}};
 use winldap::control::{LdapControl, BerVal, BerEncodable};
 use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION};
 
@@ -117,15 +117,17 @@ pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &s
             }
 
             // Ignore read-only ACEs which cannot be abused (e.g. to read LAPS passwords).
-            if (ace.get_mask() & !(ADS_RIGHT_READ_CONTROL.0 as u32 |
-                                   ADS_RIGHT_ACTRL_DS_LIST.0 as u32 |
-                                   ADS_RIGHT_DS_LIST_OBJECT.0 as u32 |
-                                   ADS_RIGHT_DS_READ_PROP.0 as u32)) == 0 {
+            let mask = ace.get_mask() & !(ADS_RIGHT_READ_CONTROL.0 as u32 |
+                ADS_RIGHT_ACTRL_DS_LIST.0 as u32 |
+                ADS_RIGHT_DS_LIST_OBJECT.0 as u32 |
+                ADS_RIGHT_DS_READ_PROP.0 as u32);
+            if mask == 0 {
                 continue;
             }
 
-            const ENTEPRISE_KEY_ADMINS_RID: u32 = 527;
+            const CLONEABLE_DOMAIN_CONTROLLERS_RID: u32 = 522;
             const KEY_ADMINS_RID: u32 = 526;
+            const ENTEPRISE_KEY_ADMINS_RID: u32 = 527;
 
             // Ignore Key Admins having full rights on the msDS-KeyCredentialLink attribute or on the Keys container
             let null_sid = Sid::from_str("S-1-0-0").unwrap();
@@ -137,6 +139,32 @@ pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &s
                 if let AceType::AccessAllowedObject { object_type: Some(guid), .. } = &ace.type_specific {
                     if let Some(name) = schema.attribute_guids.get(guid) {
                         if name.to_ascii_lowercase() == "msds-keycredentiallink" {
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // Ignore cloneable DCs having the right to create a clone of themselves
+            if mask == ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32 {
+                if let Some(domain_sid) = &domain_sid {
+                    if let AceType::AccessAllowedObject { object_type: Some(guid), .. } = &ace.type_specific {       
+                        if let Some(name) = schema.control_access_names.get(guid) {
+                            if ace.get_trustee() == &Sid::with_rid(domain_sid, CLONEABLE_DOMAIN_CONTROLLERS_RID) &&
+                                    name.to_ascii_lowercase() == "allow a dc to create a clone of itself" {
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Ignore rights to apply GPOs (it's not a delegation on the GPO), and to change password (everyone
+            // can, since it requires knowing the current password)
+            if mask == ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32 {
+                if let AceType::AccessAllowedObject { object_type: Some(guid), .. } = &ace.type_specific {
+                    if let Some(name) = schema.control_access_names.get(guid) {
+                        if ["apply group policy", "change password"].contains(&name.to_ascii_lowercase().as_str()) {
                             continue;
                         }
                     }

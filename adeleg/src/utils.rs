@@ -140,8 +140,18 @@ pub(crate) fn pretty_print_ace(ace: &Ace, schema: &Schema) -> String {
             if let Some(name) = schema.attribute_guids.get(&guid) {
                 res.push_str(&format!(" on attribute {}", name));
             }
+            if let Some(name) = schema.control_access_names.get(&guid) {
+                res.push_str(&format!(" perform {}", name));
+            }
             res.push_str(&format!(" ({})", guid));
         },
+        _ => (),
+    }
+
+    match &ace.type_specific {
+        AceType::AccessAllowedObject { inherited_object_type: Some(guid), .. } => {
+            res.push_str(&format!(" inherit={}", guid));
+        }
         _ => (),
     }
     res
