@@ -73,6 +73,11 @@ pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &s
         let owner = sd.owner.expect("assertion failed: object without an owner");
         let dacl = sd.dacl.expect("assertion failed: object without a DACL");
 
+        // Check if the DACL is in canonical order
+        if !dacl.is_canonical() {
+            println!(">> DACL of {} is not in canonical order!", entry.dn);
+        }
+
         // Check if the owner of this object is Administrators or Domain Admins (the two
         // SIDs which get the SE_GROUP_OWNER flag)
         if !allowed_owner_sids.contains(&owner) && !allowed_owner_rids.contains(&owner.get_rid()) {

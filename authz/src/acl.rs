@@ -45,6 +45,18 @@ impl Acl {
             aces,
         })
     }
+
+    pub fn is_canonical(&self) -> bool {
+        let mut in_deny_aces = true;
+        for ace in &self.aces {
+            if ace.grants_access() {
+                in_deny_aces = false;
+            } else if !in_deny_aces {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 impl Display for Acl {
