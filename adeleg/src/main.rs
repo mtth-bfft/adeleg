@@ -5,7 +5,7 @@ use winldap::connection::{LdapConnection, LdapCredentials};
 use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
 use crate::schema::Schema;
-use crate::delegations::get_explicit_delegations;
+use crate::delegations::{get_explicit_delegations, get_schema_delegations};
 use crate::utils::{get_forest_sid, get_adminsdholder_sd};
 
 fn main() {
@@ -106,6 +106,8 @@ fn main() {
             std::process::exit(1);
         }
     };
+
+    get_schema_delegations(&schema, &forest_sid);
 
     for naming_context in conn.get_naming_contexts() {
         println!("Fetching security descriptors of naming context {}", naming_context);

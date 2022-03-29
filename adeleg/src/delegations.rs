@@ -12,6 +12,75 @@ use windows::Win32::Networking::{Ldap::{LDAP_SCOPE_SUBTREE, LDAP_SERVER_SD_FLAGS
 use winldap::control::{LdapControl, BerVal, BerEncodable};
 use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION};
 
+pub(crate) fn get_schema_delegations(schema: &Schema, forest_sid: &Sid) {
+    // TODO: replace with a computation at startup, enumerate subdomains, expand to a list of SIDs privileged at forest level
+    let allowed_owner_sids: HashSet<Sid> = HashSet::from([
+        Sid::from_str("S-1-5-18").expect("invalid SID"), // LocalSystem is owner of system objects
+        Sid::from_str("S-1-5-32-544").expect("invalid SID"), // objects created by Administrators members are owned by Administrators
+    ]);
+    let allowed_owner_rids = HashSet::from([
+        500, // the builtin Administrator account should never be de-privileged, don't flag it
+        512, // objects created by Domain Admins members are owned by Domain Admins
+        518, // Schema admins
+        519, // Enterprise Admins
+    ]);
+    let ignored_trustee_sids: HashSet<Sid> = HashSet::from([
+        Sid::from_str("S-1-5-10").expect("invalid SID"),     // SELF
+        Sid::from_str("S-1-3-0").expect("invalid SID"),      // Creator Owner
+        Sid::from_str("S-1-5-18").expect("invalid SID"),     // Local System
+        Sid::from_str("S-1-5-20").expect("invalid SID"),     // Network Service
+        Sid::from_str("S-1-5-32-544").expect("invalid SID"), // Administrators
+        Sid::from_str("S-1-5-9").expect("invalid SID"),      // Enterprise Domain Controllers
+        Sid::from_str("S-1-5-32-548").expect("invalid SID"), // Account Operators
+        Sid::from_str("S-1-5-32-549").expect("invalid SID"), // Server Operators
+        Sid::from_str("S-1-5-32-550").expect("invalid SID"), // Print Operators
+        Sid::from_str("S-1-5-32-551").expect("invalid SID"), // Backup Operators
+    ]);
+    let ignored_trustee_rids = HashSet::from([
+        512, // Domain Admins
+        516, // Domain Controllers
+        518, // Schema Admins
+        519, // Enterprise Admins
+    ]);
+
+    let default_sds = schema.class_default_sd.get(forest_sid).unwrap();
+    for (class_name, default_sd) in default_sds {
+        if let Some(default_owner) = &default_sd.owner {
+            if !allowed_owner_sids.contains(default_owner) && !allowed_owner_rids.contains(&default_owner.get_rid()) {
+                println!(">> Ownership of all {} new objects delegated to {}", class_name, default_owner);
+            }
+        }
+
+        if let Some(default_acl) = &default_sd.dacl {
+            if !default_acl.is_canonical() {
+                println!(">> Default ACL of all {} new objects is not in canonical order!", class_name);
+            }
+            for ace in &default_acl.aces {
+                if !ace.grants_access() {
+                    continue; // ignore deny ACEs for now
+                }
+                if ignored_trustee_sids.contains(ace.get_trustee()) {
+                    continue;
+                }
+                if ignored_trustee_rids.contains(&ace.get_trustee().get_rid()) {
+                    continue;
+                }
+    
+                // Ignore read-only ACEs which cannot be abused (e.g. to read LAPS passwords).
+                let mask = ace.get_mask() & !(ADS_RIGHT_READ_CONTROL.0 as u32 |
+                    ADS_RIGHT_ACTRL_DS_LIST.0 as u32 |
+                    ADS_RIGHT_DS_LIST_OBJECT.0 as u32 |
+                    ADS_RIGHT_DS_READ_PROP.0 as u32);
+                if mask == 0 {
+                    continue;
+                }
+
+                println!(">> on all new {} objects: {}", class_name, pretty_print_ace(ace, schema));
+            }
+        }
+    }
+}
+
 pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &str, forest_sid: &Sid, schema: &Schema, adminsdholder_sd: &SecurityDescriptor) -> Result<(), LdapError> {
     // Get a list of legitimate object owners, which are highly-privileged groups
     // or principals which can compromise the entire forest in all cases.
