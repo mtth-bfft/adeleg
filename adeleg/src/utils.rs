@@ -1,4 +1,6 @@
+use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_DS_DELETE_CHILD, ADS_RIGHT_ACTRL_DS_LIST, ADS_RIGHT_DS_SELF, ADS_RIGHT_DS_READ_PROP, ADS_RIGHT_DS_WRITE_PROP, ADS_RIGHT_DS_DELETE_TREE, ADS_RIGHT_DS_LIST_OBJECT, ADS_RIGHT_DS_CONTROL_ACCESS};
 use authz::{Ace, AceType};
+use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_DELETE, ADS_RIGHT_READ_CONTROL, ADS_RIGHT_WRITE_DAC, ADS_RIGHT_WRITE_OWNER, ADS_RIGHT_SYNCHRONIZE, ADS_RIGHT_ACCESS_SYSTEM_SECURITY, ADS_RIGHT_GENERIC_READ, ADS_RIGHT_GENERIC_WRITE, ADS_RIGHT_GENERIC_EXECUTE, ADS_RIGHT_GENERIC_ALL, ADS_RIGHT_DS_CREATE_CHILD};
 use windows::Win32::Security::DACL_SECURITY_INFORMATION;
 use winldap::control::{BerVal, BerEncodable};
 use windows::Win32::Networking::Ldap::LDAP_SERVER_SD_FLAGS_OID;
@@ -129,8 +131,93 @@ pub(crate) fn get_adminsdholder_sd(conn: &LdapConnection) -> Result<SecurityDesc
     })
 }
 
+pub(crate) fn pretty_print_access_rights(mask: u32) -> String {
+    let mut res = vec![];
+    let mut mask = mask as i32;
+    if (mask & ADS_RIGHT_DELETE.0) != 0 {
+        res.push("DELETE".to_owned());
+        mask -= ADS_RIGHT_DELETE.0;
+    }
+    if (mask & ADS_RIGHT_READ_CONTROL.0) != 0 {
+        res.push("READ_CONTROL".to_owned());
+        mask -= ADS_RIGHT_READ_CONTROL.0;
+    }
+    if (mask & ADS_RIGHT_WRITE_DAC.0) != 0 {
+        res.push("WRITE_DAC".to_owned());
+        mask -= ADS_RIGHT_WRITE_DAC.0;
+    }
+    if (mask & ADS_RIGHT_WRITE_OWNER.0) != 0 {
+        res.push("WRITE_OWNER".to_owned());
+        mask -= ADS_RIGHT_WRITE_OWNER.0;
+    }
+    if (mask & ADS_RIGHT_SYNCHRONIZE.0) != 0 {
+        res.push("WRITE_OWNER".to_owned());
+        mask -= ADS_RIGHT_SYNCHRONIZE.0;
+    }
+    if (mask & ADS_RIGHT_ACCESS_SYSTEM_SECURITY.0) != 0 {
+        res.push("ACCESS_SYSTEM_SECURITY".to_owned());
+        mask -= ADS_RIGHT_ACCESS_SYSTEM_SECURITY.0;
+    }
+    if (mask & ADS_RIGHT_GENERIC_READ.0) != 0 {
+        res.push("GENERIC_READ".to_owned());
+        mask -= ADS_RIGHT_GENERIC_READ.0;
+    }
+    if (mask & ADS_RIGHT_GENERIC_WRITE.0) != 0 {
+        res.push("GENERIC_WRITE".to_owned());
+        mask -= ADS_RIGHT_GENERIC_WRITE.0;
+    }
+    if (mask & ADS_RIGHT_GENERIC_EXECUTE.0) != 0 {
+        res.push("GENERIC_EXECUTE".to_owned());
+        mask -= ADS_RIGHT_GENERIC_EXECUTE.0;
+    }
+    if (mask & ADS_RIGHT_GENERIC_ALL.0) != 0 {
+        res.push("GENERIC_ALL".to_owned());
+        mask -= ADS_RIGHT_GENERIC_ALL.0;
+    }
+    if (mask & ADS_RIGHT_DS_CREATE_CHILD.0) != 0 {
+        res.push("CREATE_CHILD".to_owned());
+        mask -= ADS_RIGHT_DS_CREATE_CHILD.0;
+    }
+    if (mask & ADS_RIGHT_DS_DELETE_CHILD.0) != 0 {
+        res.push("DELETE_CHILD".to_owned());
+        mask -= ADS_RIGHT_DS_DELETE_CHILD.0;
+    }
+    if (mask & ADS_RIGHT_ACTRL_DS_LIST.0) != 0 {
+        res.push("LIST".to_owned());
+        mask -= ADS_RIGHT_ACTRL_DS_LIST.0;
+    }
+    if (mask & ADS_RIGHT_DS_SELF.0) != 0 {
+        res.push("SELF".to_owned());
+        mask -= ADS_RIGHT_DS_SELF.0;
+    }
+    if (mask & ADS_RIGHT_DS_READ_PROP.0) != 0 {
+        res.push("READ_PROP".to_owned());
+        mask -= ADS_RIGHT_DS_READ_PROP.0;
+    }
+    if (mask & ADS_RIGHT_DS_WRITE_PROP.0) != 0 {
+        res.push("WRITE_PROP".to_owned());
+        mask -= ADS_RIGHT_DS_WRITE_PROP.0;
+    }
+    if (mask & ADS_RIGHT_DS_DELETE_TREE.0) != 0 {
+        res.push("DELETE_TREE".to_owned());
+        mask -= ADS_RIGHT_DS_DELETE_TREE.0;
+    }
+    if (mask & ADS_RIGHT_DS_LIST_OBJECT.0) != 0 {
+        res.push("LIST_OBJECT".to_owned());
+        mask -= ADS_RIGHT_DS_LIST_OBJECT.0;
+    }
+    if (mask & ADS_RIGHT_DS_CONTROL_ACCESS.0) != 0 {
+        res.push("CONTROL_ACCESS".to_owned());
+        mask -= ADS_RIGHT_DS_CONTROL_ACCESS.0;
+    }
+    if mask != 0 {
+        res.push(format!("0x{:X}", mask));
+    }
+    res.join(" | ")
+}
+
 pub(crate) fn pretty_print_ace(ace: &Ace, schema: &Schema) -> String {
-    let mut res = format!("{} access mask 0x{:X}", ace.get_trustee(), ace.get_mask());
+    let mut res = format!("{} access mask 0x{:X} ({})", ace.get_trustee(), ace.get_mask(), pretty_print_access_rights(ace.get_mask()));
     match &ace.type_specific {
         AceType::AccessAllowed { .. } | AceType::AccessAllowedObject { object_type: None, .. } => (),
         AceType::AccessAllowedObject { object_type: Some(guid), .. } => {
