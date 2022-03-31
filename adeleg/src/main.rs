@@ -4,6 +4,7 @@ mod delegations;
 use winldap::connection::{LdapConnection, LdapCredentials};
 use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
+use serde_json;
 use crate::schema::Schema;
 use crate::delegations::{get_explicit_delegations, get_schema_delegations};
 use crate::utils::{get_forest_sid, get_adminsdholder_sd};
@@ -128,6 +129,6 @@ fn main() {
     }
 
     for deleg in &delegations {
-        println!("{:?}", deleg);
+        println!("\n{}", serde_json::to_string(deleg).unwrap());
     }
 }

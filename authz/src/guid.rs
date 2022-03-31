@@ -88,3 +88,10 @@ impl Debug for Guid {
         f.write_str(&self.to_string())
     }
 }
+
+#[cfg(feature = "serial")]
+impl serde::Serialize for Guid {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: serde::Serializer {
+        serializer.serialize_str(&self.to_string())
+    }
+}

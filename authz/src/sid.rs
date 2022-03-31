@@ -96,3 +96,10 @@ impl Debug for Sid {
         f.write_str(&self.to_string())
     }
 }
+
+#[cfg(feature = "serial")]
+impl serde::Serialize for Sid {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: serde::Serializer {
+        serializer.serialize_str(&self.to_string())
+    }
+}

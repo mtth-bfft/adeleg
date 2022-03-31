@@ -2,6 +2,7 @@ use authz::{Ace, AceType, Guid};
 use winldap::utils::get_attr_str;
 use std::collections::HashSet;
 use authz::{SecurityDescriptor, Sid};
+use serde::Serialize;
 use crate::{utils::{get_attr_sd, get_domain_sid}, schema::Schema};
 use winldap::connection::LdapConnection;
 use winldap::utils::get_attr_strs;
@@ -11,45 +12,64 @@ use windows::Win32::Networking::{Ldap::{LDAP_SCOPE_SUBTREE, LDAP_SERVER_SD_FLAGS
 use winldap::control::{LdapControl, BerVal, BerEncodable};
 use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION};
 
-#[derive(Debug)]
+fn is_default<T: Default + PartialEq>(t: &T) -> bool {
+    t == &T::default()
+}
+
+#[derive(Debug, Serialize)]
 pub enum DelegationTrustee {
     Sid(Sid),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Serialize)]
 pub enum DelegationLocation {
-    DefaultSecurityDescriptor {
-        class_name: String,
-    },
+    // defaultSecurityDescriptor of a given class name, in the schema partition
+    DefaultSecurityDescriptor(String),
     DN(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub enum DelegationRights {
     Ownership,
     Ace {
         access_mask: u32,
+        #[serde(skip_serializing_if = "is_default")]
+        #[serde(default)]
         container_inherit: bool,
+        #[serde(skip_serializing_if = "is_default")]
+        #[serde(default)]
         object_inherit: bool,
+        #[serde(skip_serializing_if = "is_default")]
+        #[serde(default)]
         inherit_only: bool,
+        #[serde(skip_serializing_if = "is_default")]
+        #[serde(default)]
         no_propagate: bool,
+        #[serde(skip_serializing_if = "is_default")]
+        #[serde(default)]
         object_type: Option<Guid>,
+        #[serde(skip_serializing_if = "is_default")]
+        #[serde(default)]
         inherited_object_type: Option<Guid>,
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct DelegationTemplatePart {
     rights: DelegationRights,
+    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default)]
     location: Option<DelegationLocation>,
 }
 
 pub type DelegationTemplate = Vec<DelegationTemplatePart>;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct Delegation {
     trustee: DelegationTrustee,
     template: DelegationTemplate,
+    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default)]
     locations: Vec<DelegationLocation>,
 }
 
@@ -95,7 +115,7 @@ pub(crate) fn get_schema_delegations(schema: &Schema, forest_sid: &Sid) -> Vec<D
                     template: vec![
                         DelegationTemplatePart {
                             rights: DelegationRights::Ownership,
-                            location: Some(DelegationLocation::DefaultSecurityDescriptor { class_name: class_name.to_owned() }),
+                            location: Some(DelegationLocation::DefaultSecurityDescriptor(class_name.to_owned())),
                         }
                     ],
                     locations: vec![],
@@ -138,7 +158,7 @@ pub(crate) fn get_schema_delegations(schema: &Schema, forest_sid: &Sid) -> Vec<D
                                 object_type: ace.get_object_type().copied(),
                                 inherited_object_type: ace.get_inherited_object_type().copied(),
                             },
-                            location: Some(DelegationLocation::DefaultSecurityDescriptor { class_name: class_name.to_owned() }),
+                            location: Some(DelegationLocation::DefaultSecurityDescriptor(class_name.to_owned())),
                         }
                     ],
                     locations: vec![],
