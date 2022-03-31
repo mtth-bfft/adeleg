@@ -2,7 +2,7 @@ use authz::{Ace, AceType, Guid};
 use winldap::utils::get_attr_str;
 use std::collections::HashSet;
 use authz::{SecurityDescriptor, Sid};
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use crate::{utils::{get_attr_sd, get_domain_sid}, schema::Schema};
 use winldap::connection::LdapConnection;
 use winldap::utils::get_attr_strs;
@@ -16,19 +16,19 @@ fn is_default<T: Default + PartialEq>(t: &T) -> bool {
     t == &T::default()
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum DelegationTrustee {
     Sid(Sid),
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DelegationLocation {
     // defaultSecurityDescriptor of a given class name, in the schema partition
     DefaultSecurityDescriptor(String),
     DN(String),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum DelegationRights {
     Ownership,
     Ace {
@@ -54,30 +54,31 @@ pub enum DelegationRights {
     },
 }
 
-#[derive(Debug, Serialize)]
-pub struct DelegationTemplatePart {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DelegationTemplate {
     rights: DelegationRights,
     #[serde(skip_serializing_if = "is_default")]
     #[serde(default)]
-    location: Option<DelegationLocation>,
+    fixed_location: Option<DelegationLocation>,
 }
 
-pub type DelegationTemplate = Vec<DelegationTemplatePart>;
-
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Delegation {
     trustee: DelegationTrustee,
-    template: DelegationTemplate,
-    #[serde(skip_serializing_if = "is_default")]
-    #[serde(default)]
-    locations: Vec<DelegationLocation>,
+    templates: Vec<(DelegationTemplate, Option<DelegationLocation>)>,
+}
+
+impl Delegation {
+    pub fn is_instance_of(&self, base_delegation: &Delegation) -> bool {
+        false // TODO
+    }
 }
 
 pub(crate) fn get_schema_delegations(schema: &Schema, forest_sid: &Sid) -> Vec<Delegation> {
     // TODO: replace with a computation at startup, enumerate subdomains, expand to a list of SIDs privileged at forest level
     let allowed_owner_sids: HashSet<Sid> = HashSet::from([
-        Sid::from_str("S-1-5-18").expect("invalid SID"), // LocalSystem is owner of system objects
-        Sid::from_str("S-1-5-32-544").expect("invalid SID"), // objects created by Administrators members are owned by Administrators
+        Sid::try_from("S-1-5-18").expect("invalid SID"), // LocalSystem is owner of system objects
+        Sid::try_from("S-1-5-32-544").expect("invalid SID"), // objects created by Administrators members are owned by Administrators
     ]);
     let allowed_owner_rids = HashSet::from([
         500, // the builtin Administrator account should never be de-privileged, don't flag it
@@ -86,16 +87,16 @@ pub(crate) fn get_schema_delegations(schema: &Schema, forest_sid: &Sid) -> Vec<D
         519, // Enterprise Admins
     ]);
     let ignored_trustee_sids: HashSet<Sid> = HashSet::from([
-        Sid::from_str("S-1-5-10").expect("invalid SID"),     // SELF
-        Sid::from_str("S-1-3-0").expect("invalid SID"),      // Creator Owner
-        Sid::from_str("S-1-5-18").expect("invalid SID"),     // Local System
-        Sid::from_str("S-1-5-20").expect("invalid SID"),     // Network Service
-        Sid::from_str("S-1-5-32-544").expect("invalid SID"), // Administrators
-        Sid::from_str("S-1-5-9").expect("invalid SID"),      // Enterprise Domain Controllers
-        Sid::from_str("S-1-5-32-548").expect("invalid SID"), // Account Operators
-        Sid::from_str("S-1-5-32-549").expect("invalid SID"), // Server Operators
-        Sid::from_str("S-1-5-32-550").expect("invalid SID"), // Print Operators
-        Sid::from_str("S-1-5-32-551").expect("invalid SID"), // Backup Operators
+        Sid::try_from("S-1-5-10").expect("invalid SID"),     // SELF
+        Sid::try_from("S-1-3-0").expect("invalid SID"),      // Creator Owner
+        Sid::try_from("S-1-5-18").expect("invalid SID"),     // Local System
+        Sid::try_from("S-1-5-20").expect("invalid SID"),     // Network Service
+        Sid::try_from("S-1-5-32-544").expect("invalid SID"), // Administrators
+        Sid::try_from("S-1-5-9").expect("invalid SID"),      // Enterprise Domain Controllers
+        Sid::try_from("S-1-5-32-548").expect("invalid SID"), // Account Operators
+        Sid::try_from("S-1-5-32-549").expect("invalid SID"), // Server Operators
+        Sid::try_from("S-1-5-32-550").expect("invalid SID"), // Print Operators
+        Sid::try_from("S-1-5-32-551").expect("invalid SID"), // Backup Operators
     ]);
     let ignored_trustee_rids = HashSet::from([
         512, // Domain Admins
@@ -112,13 +113,12 @@ pub(crate) fn get_schema_delegations(schema: &Schema, forest_sid: &Sid) -> Vec<D
             if !allowed_owner_sids.contains(default_owner) && !allowed_owner_rids.contains(&default_owner.get_rid()) {
                 res.push(Delegation {
                     trustee: DelegationTrustee::Sid(default_owner.to_owned()),
-                    template: vec![
-                        DelegationTemplatePart {
+                    templates: vec![
+                        (DelegationTemplate {
                             rights: DelegationRights::Ownership,
-                            location: Some(DelegationLocation::DefaultSecurityDescriptor(class_name.to_owned())),
-                        }
+                            fixed_location: Some(DelegationLocation::DefaultSecurityDescriptor(class_name.to_owned())),
+                        }, None)
                     ],
-                    locations: vec![],
                 });
             }
         }
@@ -147,8 +147,8 @@ pub(crate) fn get_schema_delegations(schema: &Schema, forest_sid: &Sid) -> Vec<D
 
                 res.push(Delegation {
                     trustee: DelegationTrustee::Sid(ace.get_trustee().to_owned()),
-                    template: vec![
-                        DelegationTemplatePart {
+                    templates: vec![
+                        (DelegationTemplate {
                             rights: DelegationRights::Ace {
                                 access_mask: ace.get_mask(),
                                 container_inherit: ace.get_container_inherit(),
@@ -158,10 +158,9 @@ pub(crate) fn get_schema_delegations(schema: &Schema, forest_sid: &Sid) -> Vec<D
                                 object_type: ace.get_object_type().copied(),
                                 inherited_object_type: ace.get_inherited_object_type().copied(),
                             },
-                            location: Some(DelegationLocation::DefaultSecurityDescriptor(class_name.to_owned())),
-                        }
+                            fixed_location: Some(DelegationLocation::DefaultSecurityDescriptor(class_name.to_owned())),
+                        }, None)
                     ],
-                    locations: vec![],
                 });
             }
         }
@@ -173,8 +172,8 @@ pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &s
     // Get a list of legitimate object owners, which are highly-privileged groups
     // or principals which can compromise the entire forest in all cases.
     let allowed_owner_sids: HashSet<Sid> = HashSet::from([
-        Sid::from_str("S-1-5-18").expect("invalid SID"), // LocalSystem is owner of system objects
-        Sid::from_str("S-1-5-32-544").expect("invalid SID"), // objects created by Administrators members are owned by Administrators
+        Sid::try_from("S-1-5-18").expect("invalid SID"), // LocalSystem is owner of system objects
+        Sid::try_from("S-1-5-32-544").expect("invalid SID"), // objects created by Administrators members are owned by Administrators
     ]);
     let allowed_owner_rids = HashSet::from([
         500, // the builtin Administrator account should never be de-privileged, don't flag it
@@ -195,16 +194,16 @@ pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &s
     // either generically or often enough that we recommend to leave the group empty in another
     // audit check.
     let ignored_trustee_sids: HashSet<Sid> = HashSet::from([
-        Sid::from_str("S-1-5-10").expect("invalid SID"),     // SELF
-        Sid::from_str("S-1-3-0").expect("invalid SID"),      // Creator Owner
-        Sid::from_str("S-1-5-18").expect("invalid SID"),     // Local System
-        Sid::from_str("S-1-5-20").expect("invalid SID"),     // Network Service
-        Sid::from_str("S-1-5-32-544").expect("invalid SID"), // Administrators
-        Sid::from_str("S-1-5-9").expect("invalid SID"),      // Enterprise Domain Controllers
-        Sid::from_str("S-1-5-32-548").expect("invalid SID"), // Account Operators
-        Sid::from_str("S-1-5-32-549").expect("invalid SID"), // Server Operators
-        Sid::from_str("S-1-5-32-550").expect("invalid SID"), // Print Operators
-        Sid::from_str("S-1-5-32-551").expect("invalid SID"), // Backup Operators
+        Sid::try_from("S-1-5-10").expect("invalid SID"),     // SELF
+        Sid::try_from("S-1-3-0").expect("invalid SID"),      // Creator Owner
+        Sid::try_from("S-1-5-18").expect("invalid SID"),     // Local System
+        Sid::try_from("S-1-5-20").expect("invalid SID"),     // Network Service
+        Sid::try_from("S-1-5-32-544").expect("invalid SID"), // Administrators
+        Sid::try_from("S-1-5-9").expect("invalid SID"),      // Enterprise Domain Controllers
+        Sid::try_from("S-1-5-32-548").expect("invalid SID"), // Account Operators
+        Sid::try_from("S-1-5-32-549").expect("invalid SID"), // Server Operators
+        Sid::try_from("S-1-5-32-550").expect("invalid SID"), // Print Operators
+        Sid::try_from("S-1-5-32-551").expect("invalid SID"), // Backup Operators
     ]);
     let ignored_trustee_rids = HashSet::from([
         512, // Domain Admins
@@ -247,13 +246,12 @@ pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &s
         if !allowed_owner_sids.contains(&owner) && !allowed_owner_rids.contains(&owner.get_rid()) {
             res.push(Delegation {
                 trustee: DelegationTrustee::Sid(owner.to_owned()),
-                template: vec![
-                    DelegationTemplatePart {
+                templates: vec![
+                    (DelegationTemplate {
                         rights: DelegationRights::Ownership,
-                        location: None,
-                    }
+                        fixed_location: None,
+                    }, Some(DelegationLocation::DN(entry.dn.to_owned()))),
                 ],
-                locations: vec![DelegationLocation::DN(entry.dn.to_owned())],
             });
         }
 
@@ -315,7 +313,7 @@ pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &s
             const ENTEPRISE_KEY_ADMINS_RID: u32 = 527;
 
             // Ignore Key Admins having full rights on the msDS-KeyCredentialLink attribute or on the Keys container
-            let null_sid = Sid::from_str("S-1-0-0").unwrap();
+            let null_sid = Sid::try_from("S-1-0-0").unwrap();
             if ace.get_trustee().get_rid() == ENTEPRISE_KEY_ADMINS_RID ||
                     ace.get_trustee() == &Sid::with_rid(domain_sid.as_ref().unwrap_or(&null_sid), KEY_ADMINS_RID) {
                 if entry.dn.to_ascii_lowercase() == format!("CN=Keys,{}", naming_context).to_ascii_lowercase() {
@@ -336,8 +334,8 @@ pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &s
 
             res.push(Delegation {
                 trustee: DelegationTrustee::Sid(ace.get_trustee().to_owned()),
-                template: vec![
-                    DelegationTemplatePart {
+                templates: vec![
+                    (DelegationTemplate {
                         rights: DelegationRights::Ace {
                             access_mask: ace.get_mask(),
                             container_inherit: ace.get_container_inherit(),
@@ -347,10 +345,9 @@ pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &s
                             object_type: ace.get_object_type().copied(),
                             inherited_object_type: ace.get_inherited_object_type().copied(),
                         },
-                        location: None,
-                    }
+                        fixed_location: None,
+                    }, Some(DelegationLocation::DN(entry.dn.to_owned()))),
                 ],
-                locations: vec![DelegationLocation::DN(entry.dn.to_owned())],
             });
         }
     }

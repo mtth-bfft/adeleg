@@ -5,6 +5,8 @@ mod ace;
 mod sid;
 mod guid;
 mod utils;
+#[cfg(feature = "serial")]
+mod serial;
 
 pub use security_descriptor::SecurityDescriptor;
 pub use acl::Acl;

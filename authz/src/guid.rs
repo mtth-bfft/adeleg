@@ -41,9 +41,12 @@ impl From<GUID> for Guid {
 impl TryFrom<&str> for Guid {
     type Error = GuidParsingError;
 
-    fn try_from(s: &str) -> Result<Self, Self::Error> {
+    fn try_from(mut s: &str) -> Result<Self, Self::Error> {
         // Text GUIDs can look like 91e647de-d96f-4b70-9557-d63ff4f3ccd8
         // or like {91e647de-d96f-4b70-9557-d63ff4f3ccd8}
+        if s.starts_with('{') && s.ends_with('}') {
+            s = s.strip_prefix('{').unwrap().strip_suffix('}').unwrap();
+        }
         let bytes = s.as_bytes();
         if bytes.len() != 36 {
             return Err(GuidParsingError::InvalidLength);
@@ -86,12 +89,5 @@ impl Display for Guid {
 impl Debug for Guid {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
         f.write_str(&self.to_string())
-    }
-}
-
-#[cfg(feature = "serial")]
-impl serde::Serialize for Guid {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: serde::Serializer {
-        serializer.serialize_str(&self.to_string())
     }
 }

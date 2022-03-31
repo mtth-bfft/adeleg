@@ -1,12 +1,14 @@
 mod utils;
 mod schema;
 mod delegations;
+use std::io::BufReader;
+use std::fs::File;
 use winldap::connection::{LdapConnection, LdapCredentials};
 use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
 use serde_json;
 use crate::schema::Schema;
-use crate::delegations::{get_explicit_delegations, get_schema_delegations};
+use crate::delegations::{Delegation, get_explicit_delegations, get_schema_delegations};
 use crate::utils::{get_forest_sid, get_adminsdholder_sd};
 
 fn main() {
@@ -51,9 +53,40 @@ fn main() {
                 .short('p')
                 .number_of_values(1)
                 .requires_all(&["domain","username"])
+        )
+        .arg(
+            Arg::new("deleg_file")
+                .value_name("FILE")
+                .multiple_occurrences(true)
+                .help("json file with delegation templates and/or actual delegations")
+                .number_of_values(1)
         );
 
     let args = app.get_matches();
+
+    let base_delegations: Vec<Delegation> = {
+        let mut res = vec![];
+        let input_filepaths: Vec<&str> = args.values_of("deleg_file").unwrap().collect();
+        for input_filepath in &input_filepaths {
+            let file = match File::open(input_filepath) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!(" [!] Unable to open file {} : {}", input_filepath, e);
+                    std::process::exit(1);
+                }
+            };
+            let reader = BufReader::new(file);
+            match serde_json::from_reader(reader) {
+                Ok(mut v) => res.append(&mut v),
+                Err(e) => {
+                    eprintln!(" [!] Unable to parse file {} : {}", input_filepath, e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        res
+    };
+
     let server= args.value_of("server");
     let port = args.value_of("port").expect("no port set");
     let port = match port.parse::<u16>() {
@@ -129,6 +162,16 @@ fn main() {
     }
 
     for deleg in &delegations {
-        println!("\n{}", serde_json::to_string(deleg).unwrap());
+        let mut found = false;
+        for base_deleg in &base_delegations {
+            if deleg.is_instance_of(&base_deleg) {
+                found = true;
+                break;
+            }
+        }
+        if found {
+            continue;
+        }
+        println!("\n{}", serde_json::to_string_pretty(deleg).unwrap());
     }
 }

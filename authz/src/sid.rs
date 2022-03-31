@@ -1,4 +1,5 @@
 use core::fmt::Debug;
+use std::convert::TryFrom;
 use windows::Win32::Security::GetSidSubAuthority;
 use windows::Win32::Security::GetSidSubAuthorityCount;
 use core::ptr::null_mut;
@@ -34,17 +35,6 @@ impl Sid {
         })
     }
 
-    pub fn from_str(str: &str) -> Result<Self, AuthzError> {
-        let mut psid = PSID(0);
-        let succeeded = unsafe { ConvertStringSidToSidW(str, &mut psid as *mut _) };
-        if !succeeded.as_bool() {
-            return Err(AuthzError::InvalidSidString { str: str.to_owned(), code: get_last_error() });
-        }
-        let res = unsafe { Self::from_ptr(psid) };
-        unsafe { LocalFree(psid.0); }
-        res
-    }
-
     pub(crate) unsafe fn from_ptr(sid: PSID) -> Result<Self, AuthzError> {
         let is_valid = IsValidSid(sid);
         if !is_valid.as_bool() {
@@ -71,7 +61,22 @@ impl Sid {
 
     pub fn with_rid(&self, rid: u32) -> Self {
         let s = format!("{}-{}", self, rid);
-        Self::from_str(&s).expect("invalid RID concatenation")
+        Self::try_from(s.as_ref()).expect("invalid RID concatenation")
+    }
+}
+
+impl TryFrom<&str> for Sid {
+    type Error = AuthzError;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        let mut psid = PSID(0);
+        let succeeded = unsafe { ConvertStringSidToSidW(s, &mut psid as *mut _) };
+        if !succeeded.as_bool() {
+            return Err(AuthzError::InvalidSidString { code: get_last_error(), str: s.to_owned() });
+        }
+        let res = unsafe { Self::from_ptr(psid) };
+        unsafe { LocalFree(psid.0); }
+        res
     }
 }
 
@@ -94,12 +99,5 @@ impl Display for Sid {
 impl Debug for Sid {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
         f.write_str(&self.to_string())
-    }
-}
-
-#[cfg(feature = "serial")]
-impl serde::Serialize for Sid {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: serde::Serializer {
-        serializer.serialize_str(&self.to_string())
     }
 }
