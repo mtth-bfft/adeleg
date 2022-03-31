@@ -107,14 +107,16 @@ fn main() {
         }
     };
 
-    get_schema_delegations(&schema, &forest_sid);
+    let mut delegations = vec![];
+    
+    delegations.append(&mut get_schema_delegations(&schema, &forest_sid));
 
     for naming_context in conn.get_naming_contexts() {
         println!("Fetching security descriptors of naming context {}", naming_context);
-        let delegations = match get_explicit_delegations(&conn, naming_context, &forest_sid, &schema, &adminsdholder_sd) {
-            Ok(h) => h,
+        match get_explicit_delegations(&conn, naming_context, &forest_sid, &schema, &adminsdholder_sd) {
+            Ok(mut h) => delegations.append(&mut h),
             Err(e) => {
-                eprintln!("Error when fetching security descriptors of {} : {}", naming_context, e);
+                eprintln!(" [!] Error when fetching security descriptors of naming context {} : {}", naming_context, e);
                 std::process::exit(1);
             },
         };
@@ -124,5 +126,8 @@ fn main() {
         eprintln!("Error when closing connection to \"{}:{}\" : {}", server.unwrap_or("default"), port, e);
         std::process::exit(1);
     }
-    println!("Ok!");
+
+    for deleg in &delegations {
+        println!("{:?}", deleg);
+    }
 }

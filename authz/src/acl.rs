@@ -46,16 +46,22 @@ impl Acl {
         })
     }
 
-    pub fn is_canonical(&self) -> bool {
+    pub fn check_canonicality(&self) -> Result<(), Ace> {
         let mut in_deny_aces = true;
+        let mut in_explicit_aces = true;
         for ace in &self.aces {
             if ace.grants_access() {
                 in_deny_aces = false;
             } else if !in_deny_aces {
-                return false;
+                return Err(ace.to_owned());
+            }
+            if ace.is_inherited() {
+                in_explicit_aces = false;
+            } else if !in_explicit_aces {
+                return Err(ace.to_owned());
             }
         }
-        true
+        Ok(())
     }
 }
 

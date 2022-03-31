@@ -52,6 +52,11 @@ impl Schema {
             if let Ok(sddl) = get_attr_str(&[&entry], &entry.dn, "defaultsecuritydescriptor") {
                 for domain_sid in &domain_sids {
                     let sd = SecurityDescriptor::from_str(&sddl, &domain_sid, &forest_sid).expect("unable to parse defaultSecurityDescriptor in schema");
+                    if let Some(default_acl) = &sd.dacl {
+                        if let Err(ace) = default_acl.check_canonicality() {
+                            eprintln!(" [!] Default ACL of class {} at {} is not in canonical order, fix ACE: {:?}", name, entry.dn, ace);
+                        }
+                    }
                     let mapping = class_default_sd.entry(domain_sid.to_owned()).or_insert(HashMap::new());
                     mapping.insert(name.clone(), sd);
                 }

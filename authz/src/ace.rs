@@ -1,6 +1,6 @@
 use core::fmt::Display;
 use crate::error::AuthzError;
-use windows::Win32::Security::{ACE_HEADER, ACCESS_ALLOWED_ACE, ACCESS_DENIED_ACE, ACCESS_ALLOWED_CALLBACK_ACE, ACCESS_ALLOWED_CALLBACK_OBJECT_ACE, ACE_OBJECT_TYPE_PRESENT, ACE_INHERITED_OBJECT_TYPE_PRESENT, ACCESS_DENIED_CALLBACK_ACE, ACCESS_DENIED_CALLBACK_OBJECT_ACE, ACCESS_ALLOWED_OBJECT_ACE, ACCESS_DENIED_OBJECT_ACE, SYSTEM_AUDIT_ACE, SYSTEM_AUDIT_OBJECT_ACE, SYSTEM_AUDIT_CALLBACK_OBJECT_ACE, SYSTEM_AUDIT_CALLBACK_ACE, SYSTEM_MANDATORY_LABEL_ACE, INHERITED_ACE};
+use windows::Win32::Security::{ACE_HEADER, ACCESS_ALLOWED_ACE, ACCESS_DENIED_ACE, ACCESS_ALLOWED_CALLBACK_ACE, ACCESS_ALLOWED_CALLBACK_OBJECT_ACE, ACE_OBJECT_TYPE_PRESENT, ACE_INHERITED_OBJECT_TYPE_PRESENT, ACCESS_DENIED_CALLBACK_ACE, ACCESS_DENIED_CALLBACK_OBJECT_ACE, ACCESS_ALLOWED_OBJECT_ACE, ACCESS_DENIED_OBJECT_ACE, SYSTEM_AUDIT_ACE, SYSTEM_AUDIT_OBJECT_ACE, SYSTEM_AUDIT_CALLBACK_OBJECT_ACE, SYSTEM_AUDIT_CALLBACK_ACE, SYSTEM_MANDATORY_LABEL_ACE, INHERITED_ACE, CONTAINER_INHERIT_ACE, OBJECT_INHERIT_ACE, INHERIT_ONLY_ACE, NO_PROPAGATE_INHERIT_ACE};
 use windows::Win32::System::SystemServices::{ACCESS_ALLOWED_ACE_TYPE, ACCESS_ALLOWED_OBJECT_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_ACE_TYPE, ACCESS_DENIED_ACE_TYPE, ACCESS_DENIED_OBJECT_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE, ACCESS_DENIED_CALLBACK_ACE_TYPE, ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE, SYSTEM_AUDIT_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_ACE_TYPE, SYSTEM_AUDIT_OBJECT_ACE_TYPE, SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE, SYSTEM_MANDATORY_LABEL_ACE_TYPE};
 use crate::{Sid, Guid};
 use windows::Win32::Foundation::PSID;
@@ -284,6 +284,22 @@ impl Ace {
         (self.flags & (INHERITED_ACE.0 as u8)) != 0
     }
 
+    pub fn get_container_inherit(&self) -> bool {
+        (self.flags & (CONTAINER_INHERIT_ACE.0 as u8)) != 0
+    }
+
+    pub fn get_object_inherit(&self) -> bool {
+        (self.flags & (OBJECT_INHERIT_ACE.0 as u8)) != 0
+    }
+
+    pub fn get_inherit_only(&self) -> bool {
+        (self.flags & (INHERIT_ONLY_ACE.0 as u8)) != 0
+    }
+
+    pub fn get_no_propagate(&self) -> bool {
+        (self.flags & (NO_PROPAGATE_INHERIT_ACE.0 as u8)) != 0
+    }
+
     pub fn get_trustee(&self) -> &Sid {
         match &self.type_specific {
             AceType::AccessAllowed { trustee, .. } => trustee,
@@ -317,6 +333,42 @@ impl Ace {
             AceType::AuditObject { mask, .. } => *mask,
             AceType::AuditCallbackObject { mask, .. } => *mask,
             AceType::MandatoryLabel { mask, .. } => *mask,
+        }
+    }
+
+    pub fn get_object_type(&self) -> Option<&Guid> {
+        match &self.type_specific {
+            AceType::AccessAllowed { .. } => None,
+            AceType::AccessAllowedObject { object_type, .. } => object_type.as_ref(),
+            AceType::AccessAllowedCallback { .. } => None,
+            AceType::AccessAllowedCallbackObject { object_type, .. } => object_type.as_ref(),
+            AceType::AccessDenied {  .. } => None,
+            AceType::AccessDeniedObject { object_type, .. } => object_type.as_ref(),
+            AceType::AccessDeniedCallback { .. } => None,
+            AceType::AccessDeniedCallbackObject { object_type, .. } => object_type.as_ref(),
+            AceType::Audit { .. } => None,
+            AceType::AuditCallback { .. } => None,
+            AceType::AuditObject { object_type, .. } => object_type.as_ref(),
+            AceType::AuditCallbackObject { object_type, .. } => object_type.as_ref(),
+            AceType::MandatoryLabel { .. } => None,
+        }
+    }
+
+    pub fn get_inherited_object_type(&self) -> Option<&Guid> {
+        match &self.type_specific {
+            AceType::AccessAllowed { .. } => None,
+            AceType::AccessAllowedObject { inherited_object_type, .. } => inherited_object_type.as_ref(),
+            AceType::AccessAllowedCallback { .. } => None,
+            AceType::AccessAllowedCallbackObject { inherited_object_type, .. } => inherited_object_type.as_ref(),
+            AceType::AccessDenied {  .. } => None,
+            AceType::AccessDeniedObject { inherited_object_type, .. } => inherited_object_type.as_ref(),
+            AceType::AccessDeniedCallback { .. } => None,
+            AceType::AccessDeniedCallbackObject { inherited_object_type, .. } => inherited_object_type.as_ref(),
+            AceType::Audit { .. } => None,
+            AceType::AuditCallback { .. } => None,
+            AceType::AuditObject { inherited_object_type, .. } => inherited_object_type.as_ref(),
+            AceType::AuditCallbackObject { inherited_object_type, .. } => inherited_object_type.as_ref(),
+            AceType::MandatoryLabel { .. } => None,
         }
     }
 

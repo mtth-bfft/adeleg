@@ -1,5 +1,4 @@
-use crate::utils::pretty_print_ace;
-use authz::{Ace, AceType};
+use authz::{Ace, AceType, Guid};
 use winldap::utils::get_attr_str;
 use std::collections::HashSet;
 use authz::{SecurityDescriptor, Sid};
@@ -12,7 +11,49 @@ use windows::Win32::Networking::{Ldap::{LDAP_SCOPE_SUBTREE, LDAP_SERVER_SD_FLAGS
 use winldap::control::{LdapControl, BerVal, BerEncodable};
 use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION};
 
-pub(crate) fn get_schema_delegations(schema: &Schema, forest_sid: &Sid) {
+#[derive(Debug)]
+pub enum DelegationTrustee {
+    Sid(Sid),
+}
+
+#[derive(Debug)]
+pub enum DelegationLocation {
+    DefaultSecurityDescriptor {
+        class_name: String,
+    },
+    DN(String),
+}
+
+#[derive(Debug)]
+pub enum DelegationRights {
+    Ownership,
+    Ace {
+        access_mask: u32,
+        container_inherit: bool,
+        object_inherit: bool,
+        inherit_only: bool,
+        no_propagate: bool,
+        object_type: Option<Guid>,
+        inherited_object_type: Option<Guid>,
+    },
+}
+
+#[derive(Debug)]
+pub struct DelegationTemplatePart {
+    rights: DelegationRights,
+    location: Option<DelegationLocation>,
+}
+
+pub type DelegationTemplate = Vec<DelegationTemplatePart>;
+
+#[derive(Debug)]
+pub struct Delegation {
+    trustee: DelegationTrustee,
+    template: DelegationTemplate,
+    locations: Vec<DelegationLocation>,
+}
+
+pub(crate) fn get_schema_delegations(schema: &Schema, forest_sid: &Sid) -> Vec<Delegation> {
     // TODO: replace with a computation at startup, enumerate subdomains, expand to a list of SIDs privileged at forest level
     let allowed_owner_sids: HashSet<Sid> = HashSet::from([
         Sid::from_str("S-1-5-18").expect("invalid SID"), // LocalSystem is owner of system objects
@@ -43,18 +84,26 @@ pub(crate) fn get_schema_delegations(schema: &Schema, forest_sid: &Sid) {
         519, // Enterprise Admins
     ]);
 
+    let mut res = vec![];
+
     let default_sds = schema.class_default_sd.get(forest_sid).unwrap();
     for (class_name, default_sd) in default_sds {
         if let Some(default_owner) = &default_sd.owner {
             if !allowed_owner_sids.contains(default_owner) && !allowed_owner_rids.contains(&default_owner.get_rid()) {
-                println!(">> Ownership of all {} new objects delegated to {}", class_name, default_owner);
+                res.push(Delegation {
+                    trustee: DelegationTrustee::Sid(default_owner.to_owned()),
+                    template: vec![
+                        DelegationTemplatePart {
+                            rights: DelegationRights::Ownership,
+                            location: Some(DelegationLocation::DefaultSecurityDescriptor { class_name: class_name.to_owned() }),
+                        }
+                    ],
+                    locations: vec![],
+                });
             }
         }
 
         if let Some(default_acl) = &default_sd.dacl {
-            if !default_acl.is_canonical() {
-                println!(">> Default ACL of all {} new objects is not in canonical order!", class_name);
-            }
             for ace in &default_acl.aces {
                 if !ace.grants_access() {
                     continue; // ignore deny ACEs for now
@@ -71,17 +120,36 @@ pub(crate) fn get_schema_delegations(schema: &Schema, forest_sid: &Sid) {
                     ADS_RIGHT_ACTRL_DS_LIST.0 as u32 |
                     ADS_RIGHT_DS_LIST_OBJECT.0 as u32 |
                     ADS_RIGHT_DS_READ_PROP.0 as u32);
+
                 if mask == 0 {
                     continue;
                 }
 
-                println!(">> on all new {} objects: {}", class_name, pretty_print_ace(ace, schema));
+                res.push(Delegation {
+                    trustee: DelegationTrustee::Sid(ace.get_trustee().to_owned()),
+                    template: vec![
+                        DelegationTemplatePart {
+                            rights: DelegationRights::Ace {
+                                access_mask: ace.get_mask(),
+                                container_inherit: ace.get_container_inherit(),
+                                object_inherit: ace.get_object_inherit(),
+                                inherit_only: ace.get_inherit_only(),
+                                no_propagate: ace.get_no_propagate(),
+                                object_type: ace.get_object_type().copied(),
+                                inherited_object_type: ace.get_inherited_object_type().copied(),
+                            },
+                            location: Some(DelegationLocation::DefaultSecurityDescriptor { class_name: class_name.to_owned() }),
+                        }
+                    ],
+                    locations: vec![],
+                });
             }
         }
     }
+    res
 }
 
-pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &str, forest_sid: &Sid, schema: &Schema, adminsdholder_sd: &SecurityDescriptor) -> Result<(), LdapError> {
+pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &str, forest_sid: &Sid, schema: &Schema, adminsdholder_sd: &SecurityDescriptor) -> Result<Vec<Delegation>, LdapError> {
     // Get a list of legitimate object owners, which are highly-privileged groups
     // or principals which can compromise the entire forest in all cases.
     let allowed_owner_sids: HashSet<Sid> = HashSet::from([
@@ -94,6 +162,11 @@ pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &s
         518, // Schema admins
         519, // Enterprise Admins
     ]);
+    let allowed_control_accesses = [
+        "apply group policy", // applying a group policy does not mean we control it
+        "change password", // changing password requires knowing the current password
+        "allow a dc to create a clone of itself", // if an attacker can impersonate a DC, cloning to a new DC is the least of your worries
+    ];
 
     let domain_sid = get_domain_sid(conn, naming_context);
     let default_sd = schema.class_default_sd.get(domain_sid.as_ref().unwrap_or(forest_sid)).expect("domain SID without defaultSecurityDescriptors");
@@ -122,6 +195,8 @@ pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &s
 
     let adminsdholder_aces: HashSet<Ace> = HashSet::from_iter(adminsdholder_sd.dacl.as_ref().unwrap().aces.iter().cloned());
 
+    let mut res = vec![];
+
     let mut sd_control_val = BerVal::new();
     sd_control_val.append(BerEncodable::Sequence(vec![BerEncodable::Integer((OWNER_SECURITY_INFORMATION.0 | DACL_SECURITY_INFORMATION.0).into())]));
     let sd_control = LdapControl::new(
@@ -143,14 +218,23 @@ pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &s
         let dacl = sd.dacl.expect("assertion failed: object without a DACL");
 
         // Check if the DACL is in canonical order
-        if !dacl.is_canonical() {
-            println!(">> DACL of {} is not in canonical order!", entry.dn);
+        if let Err(ace) = dacl.check_canonicality() {
+            eprintln!(" [!] ACL of {} is not in canonical order, fix ACE: {:?}", entry.dn, ace);
         }
 
         // Check if the owner of this object is Administrators or Domain Admins (the two
         // SIDs which get the SE_GROUP_OWNER flag)
         if !allowed_owner_sids.contains(&owner) && !allowed_owner_rids.contains(&owner.get_rid()) {
-            println!(">> {} owns {}", owner, entry.dn);
+            res.push(Delegation {
+                trustee: DelegationTrustee::Sid(owner.to_owned()),
+                template: vec![
+                    DelegationTemplatePart {
+                        rights: DelegationRights::Ownership,
+                        location: None,
+                    }
+                ],
+                locations: vec![DelegationLocation::DN(entry.dn.to_owned())],
+            });
         }
 
         let classes = get_attr_strs(&[&entry], &entry.dn, "objectclass")?;
@@ -191,15 +275,22 @@ pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &s
             }
 
             // Ignore read-only ACEs which cannot be abused (e.g. to read LAPS passwords).
-            let mask = ace.get_mask() & !(ADS_RIGHT_READ_CONTROL.0 as u32 |
-                ADS_RIGHT_ACTRL_DS_LIST.0 as u32 |
-                ADS_RIGHT_DS_LIST_OBJECT.0 as u32 |
-                ADS_RIGHT_DS_READ_PROP.0 as u32);
-            if mask == 0 {
-                continue;
+            let mut mask = ace.get_mask() as i32 & !(ADS_RIGHT_READ_CONTROL.0 |
+                ADS_RIGHT_ACTRL_DS_LIST.0 |
+                ADS_RIGHT_DS_LIST_OBJECT.0 |
+                ADS_RIGHT_DS_READ_PROP.0);
+
+            // Ignore control access rights which cannot be abused
+            if (mask & ADS_RIGHT_DS_CONTROL_ACCESS.0) != 0 {
+                if let AceType::AccessAllowedObject { object_type: Some(guid), .. } = &ace.type_specific {
+                    if let Some(name) = schema.control_access_names.get(guid) {
+                        if allowed_control_accesses.contains(&name.to_ascii_lowercase().as_str()) {
+                            mask -= ADS_RIGHT_DS_CONTROL_ACCESS.0;
+                        }
+                    }
+                }
             }
 
-            const CLONEABLE_DOMAIN_CONTROLLERS_RID: u32 = 522;
             const KEY_ADMINS_RID: u32 = 526;
             const ENTEPRISE_KEY_ADMINS_RID: u32 = 527;
 
@@ -219,34 +310,29 @@ pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &s
                 }
             }
 
-            // Ignore cloneable DCs having the right to create a clone of themselves
-            if mask == ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32 {
-                if let Some(domain_sid) = &domain_sid {
-                    if let AceType::AccessAllowedObject { object_type: Some(guid), .. } = &ace.type_specific {       
-                        if let Some(name) = schema.control_access_names.get(guid) {
-                            if ace.get_trustee() == &Sid::with_rid(domain_sid, CLONEABLE_DOMAIN_CONTROLLERS_RID) &&
-                                    name.to_ascii_lowercase() == "allow a dc to create a clone of itself" {
-                                continue;
-                            }
-                        }
-                    }
-                }
+            if mask == 0 {
+                continue;
             }
 
-            // Ignore rights to apply GPOs (it's not a delegation on the GPO), and to change password (everyone
-            // can, since it requires knowing the current password)
-            if mask == ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32 {
-                if let AceType::AccessAllowedObject { object_type: Some(guid), .. } = &ace.type_specific {
-                    if let Some(name) = schema.control_access_names.get(guid) {
-                        if ["apply group policy", "change password"].contains(&name.to_ascii_lowercase().as_str()) {
-                            continue;
-                        }
+            res.push(Delegation {
+                trustee: DelegationTrustee::Sid(ace.get_trustee().to_owned()),
+                template: vec![
+                    DelegationTemplatePart {
+                        rights: DelegationRights::Ace {
+                            access_mask: ace.get_mask(),
+                            container_inherit: ace.get_container_inherit(),
+                            object_inherit: ace.get_object_inherit(),
+                            inherit_only: ace.get_inherit_only(),
+                            no_propagate: ace.get_no_propagate(),
+                            object_type: ace.get_object_type().copied(),
+                            inherited_object_type: ace.get_inherited_object_type().copied(),
+                        },
+                        location: None,
                     }
-                }
-            }
-
-            println!(">> {} : {}", &entry.dn, pretty_print_ace(ace, schema));
+                ],
+                locations: vec![DelegationLocation::DN(entry.dn.to_owned())],
+            });
         }
     }
-    Ok(())
+    Ok(res)
 }
