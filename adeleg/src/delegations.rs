@@ -1,8 +1,8 @@
 use authz::{Ace, AceType, Guid};
 use winldap::utils::get_attr_str;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use authz::{SecurityDescriptor, Sid};
-use serde::{Serialize, Deserialize};
+use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use crate::{utils::{get_attr_sd, get_domain_sid}, schema::Schema};
 use winldap::connection::LdapConnection;
 use winldap::utils::get_attr_strs;
@@ -10,82 +10,249 @@ use winldap::error::LdapError;
 use winldap::search::LdapSearch;
 use windows::Win32::Networking::{Ldap::{LDAP_SCOPE_SUBTREE, LDAP_SERVER_SD_FLAGS_OID}, ActiveDirectory::{ADS_RIGHT_READ_CONTROL, ADS_RIGHT_ACTRL_DS_LIST, ADS_RIGHT_DS_LIST_OBJECT, ADS_RIGHT_DS_READ_PROP, ADS_RIGHT_DS_CONTROL_ACCESS}};
 use winldap::control::{LdapControl, BerVal, BerEncodable};
-use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION};
+use windows::Win32::Security::DACL_SECURITY_INFORMATION;
 
 fn is_default<T: Default + PartialEq>(t: &T) -> bool {
     t == &T::default()
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub enum DelegationTrustee {
-    Sid(Sid),
+fn true_by_default() -> bool {
+    true
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DelegationLocation {
-    // defaultSecurityDescriptor of a given class name, in the schema partition
-    DefaultSecurityDescriptor(String),
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
+pub enum DelegationTrustee {
+    Sid(Sid),
+    Rid(u32),
+    UPN(String),
+    SamAccountName(String),
     DN(String),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub enum DelegationRights {
-    Ownership,
-    Ace {
-        access_mask: u32,
-        #[serde(skip_serializing_if = "is_default")]
-        #[serde(default)]
-        container_inherit: bool,
-        #[serde(skip_serializing_if = "is_default")]
-        #[serde(default)]
-        object_inherit: bool,
-        #[serde(skip_serializing_if = "is_default")]
-        #[serde(default)]
-        inherit_only: bool,
-        #[serde(skip_serializing_if = "is_default")]
-        #[serde(default)]
-        no_propagate: bool,
-        #[serde(skip_serializing_if = "is_default")]
-        #[serde(default)]
-        object_type: Option<Guid>,
-        #[serde(skip_serializing_if = "is_default")]
-        #[serde(default)]
-        inherited_object_type: Option<Guid>,
-    },
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegationLocation {
+    // In the schema partition, in the defaultSecurityDescriptor attribute of a given class name
+    DefaultSecurityDescriptor(String),
+    // In the domain partition, at the given relative DN
+    DomainDn(String),
+    // Only used for delegations which are not delegated on a particular object
+    // and only use fixed_location fields in DelegationAce.
+    Global,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DelegationTemplate {
-    rights: DelegationRights,
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum TemplateResourceFilter {
+    // An unspecified location only restricted to some object class(es)
+    AnyInstanceOf(Vec<String>),
+    // In the schema partition, in the defaultSecurityDescriptor attribute of a given class name
+    DefaultSecurityDescriptor(String),
+    // Hardcoded relative DN in the domain partition (use with parsimony)
+    DomainDn(String),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DelegationAce {
     #[serde(skip_serializing_if = "is_default")]
     #[serde(default)]
-    fixed_location: Option<DelegationLocation>,
+    pub fixed_location: Option<DelegationLocation>,
+    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default = "true_by_default")]
+    pub allow: bool,
+    pub access_mask: u32,
+    #[serde(skip)]
+    pub object_type: Option<Guid>,
+    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default)]
+    #[serde(rename = "object_type")]
+    pub object_type_name: Option<String>,
+    #[serde(skip)]
+    pub inherited_object_type: Option<Guid>,
+    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default)]
+    pub inherited_object_type_name: Option<String>,
+    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default)]
+    pub container_inherit: bool,
+    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default)]
+    pub object_inherit: bool,
+    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default)]
+    pub inherit_only: bool,
+    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default)]
+    pub no_propagate: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DelegationTemplate {
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) resource: TemplateResourceFilter,
+    pub(crate) rights: Vec<DelegationAce>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Delegation {
-    trustee: DelegationTrustee,
-    templates: Vec<(DelegationTemplate, Option<DelegationLocation>)>,
+    pub(crate) trustee: DelegationTrustee,
+    #[serde(rename = "template")]
+    pub(crate) template_name: String,
+    #[serde(skip)]
+    pub(crate) template: Option<DelegationTemplate>,
+    pub(crate) resource: DelegationLocation,
 }
 
 impl Delegation {
-    pub fn is_instance_of(&self, base_delegation: &Delegation) -> bool {
-        false // TODO
+    pub fn from_json(json: &str) -> Result<Vec<Self>, String> {
+        match serde_json::from_str(&json) {
+            Ok(v) => Ok(v),
+            Err(e) => Err(e.to_string()),
+        }
     }
 }
 
-pub(crate) fn get_schema_delegations(schema: &Schema, forest_sid: &Sid) -> Vec<Delegation> {
+fn resolve_object_type(name: &str, schema: &Schema) -> Option<Guid> {
+    for (guid, class_name) in &schema.class_guids {
+        if class_name == name {
+            return Some(guid.clone());
+        }
+    }
+    for (guid, attr_name) in &schema.attribute_guids {
+        if attr_name == name {
+            return Some(guid.clone());
+        }
+    }
+    for (guid, propset_name) in &schema.property_set_names {
+        if propset_name == name {
+            return Some(guid.clone());
+        }
+    }
+    for (guid, validated_write_name) in &schema.validated_write_names {
+        if validated_write_name == name {
+            return Some(guid.clone());
+        }
+    }
+    for (guid, controlaccess_name) in &schema.control_access_names {
+        if controlaccess_name == name {
+            return Some(guid.clone());
+        }
+    }
+    if let Ok(guid) = Guid::try_from(name) {
+        return Some(guid);
+    }
+    None
+}
+
+fn resolve_inherited_object_type(name: &str, schema: &Schema) -> Option<Guid> {
+    for (class_guid, class_name) in &schema.class_guids {
+        if class_name == name {
+            return Some(class_guid.clone());
+        }
+    }
+    if let Ok(guid) = Guid::try_from(name) {
+        return Some(guid);
+    }
+    None
+}
+
+impl DelegationTemplate {
+    pub fn from_json(json: &str, schema: &Schema) -> Result<Vec<Self>, String> {
+        let mut res: Vec<DelegationTemplate> = serde_json::from_str(json).map_err(|e| format!("unable to parse template: {}", e))?;
+        for mut template in &mut res {
+            for ace in &mut template.rights {
+                if let Some(object_type) = &ace.object_type_name {
+                    if let Some(guid) = resolve_object_type(object_type, schema) {
+                        ace.object_type = Some(guid);
+                    } else {
+                        return Err(format!("unknown object type \"{}\"", object_type));
+                    }
+                }
+                if let Some(inherited_object_type) = &ace.inherited_object_type_name {
+                    if let Some(guid) = resolve_inherited_object_type(inherited_object_type, schema) {
+                        ace.inherited_object_type = Some(guid);
+                    } else {
+                        return Err(format!("unknown inherited object type \"{}\"", inherited_object_type));
+                    }
+                }
+            }
+        }
+        Ok(res)
+    }
+
+    pub fn to_json(&self, schema: &Schema) -> String {
+        let mut json = serde_json::to_string_pretty(self).expect("unable to serialize");
+        for ace in &self.rights {
+            if let Some(guid) = &ace.object_type {
+                if let Some(name) = schema.control_access_names.get(guid) {
+                    json = json.replace(guid.to_string().as_str(), name);
+                }
+                else if let Some(name) = schema.property_set_names.get(guid) {
+                    json = json.replace(guid.to_string().as_str(), name);
+                }
+                else if let Some(name) = schema.attribute_guids.get(guid) {
+                    json = json.replace(guid.to_string().as_str(), name);
+                }
+                else if let Some(name) = schema.class_guids.get(guid) {
+                    json = json.replace(guid.to_string().as_str(), name);
+                }
+            }
+            if let Some(guid) = &ace.inherited_object_type {
+                if let Some(name) = schema.control_access_names.get(guid) {
+                    json = json.replace(guid.to_string().as_str(), name);
+                }
+                else if let Some(name) = schema.property_set_names.get(guid) {
+                    json = json.replace(guid.to_string().as_str(), name);
+                }
+                else if let Some(name) = schema.attribute_guids.get(guid) {
+                    json = json.replace(guid.to_string().as_str(), name);
+                }
+                else if let Some(name) = schema.class_guids.get(guid) {
+                    json = json.replace(guid.to_string().as_str(), name);
+                }
+            }
+        }
+        json
+    }
+}
+
+/*
+impl Delegation {
+    pub fn from_template(aces: &[(DelegationLocation, Ace)], model: &DelegationTemplate) -> Vec<Self> {
+        let mut res = vec![];
+        let mut unmatched_aces = aces.to_vec();
+
+        for (unmatched_location, unmatched_ace) in unmatched_aces.into_iter() {
+            res.push(
+                Delegation {
+                    trustee: DelegationTrustee::Sid(trustee.to_owned()),
+                    model: DelegationModel {
+                        name: "Unknown".to_owned(),
+                        parts: vec![DelegationAce {
+                            access_mask: todo!(),
+                            object_type: todo!(),
+                            inherited_object_type: todo!(),
+                            fixed_location: Some(unmatched_location),
+                            container_inherit: unmatched_ace.get_container_inherit(),
+                            object_inherit: todo!(),
+                            inherit_only: todo!(),
+                            no_propagate: todo!()
+                        }],
+                    },
+                    location: unmatched_location,
+                }
+            );
+        }
+        res
+    }
+}
+*/
+
+pub(crate) fn get_schema_aces(schema: &Schema, forest_sid: &Sid) -> HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>> {
     // TODO: replace with a computation at startup, enumerate subdomains, expand to a list of SIDs privileged at forest level
-    let allowed_owner_sids: HashSet<Sid> = HashSet::from([
-        Sid::try_from("S-1-5-18").expect("invalid SID"), // LocalSystem is owner of system objects
-        Sid::try_from("S-1-5-32-544").expect("invalid SID"), // objects created by Administrators members are owned by Administrators
-    ]);
-    let allowed_owner_rids = HashSet::from([
-        500, // the builtin Administrator account should never be de-privileged, don't flag it
-        512, // objects created by Domain Admins members are owned by Domain Admins
-        518, // Schema admins
-        519, // Enterprise Admins
-    ]);
     let ignored_trustee_sids: HashSet<Sid> = HashSet::from([
         Sid::try_from("S-1-5-10").expect("invalid SID"),     // SELF
         Sid::try_from("S-1-3-0").expect("invalid SID"),      // Creator Owner
@@ -105,24 +272,10 @@ pub(crate) fn get_schema_delegations(schema: &Schema, forest_sid: &Sid) -> Vec<D
         519, // Enterprise Admins
     ]);
 
-    let mut res = vec![];
+    let mut res = HashMap::new();
 
     let default_sds = schema.class_default_sd.get(forest_sid).unwrap();
     for (class_name, default_sd) in default_sds {
-        if let Some(default_owner) = &default_sd.owner {
-            if !allowed_owner_sids.contains(default_owner) && !allowed_owner_rids.contains(&default_owner.get_rid()) {
-                res.push(Delegation {
-                    trustee: DelegationTrustee::Sid(default_owner.to_owned()),
-                    templates: vec![
-                        (DelegationTemplate {
-                            rights: DelegationRights::Ownership,
-                            fixed_location: Some(DelegationLocation::DefaultSecurityDescriptor(class_name.to_owned())),
-                        }, None)
-                    ],
-                });
-            }
-        }
-
         if let Some(default_acl) = &default_sd.dacl {
             for ace in &default_acl.aces {
                 if !ace.grants_access() {
@@ -145,42 +298,17 @@ pub(crate) fn get_schema_delegations(schema: &Schema, forest_sid: &Sid) -> Vec<D
                     continue;
                 }
 
-                res.push(Delegation {
-                    trustee: DelegationTrustee::Sid(ace.get_trustee().to_owned()),
-                    templates: vec![
-                        (DelegationTemplate {
-                            rights: DelegationRights::Ace {
-                                access_mask: ace.get_mask(),
-                                container_inherit: ace.get_container_inherit(),
-                                object_inherit: ace.get_object_inherit(),
-                                inherit_only: ace.get_inherit_only(),
-                                no_propagate: ace.get_no_propagate(),
-                                object_type: ace.get_object_type().copied(),
-                                inherited_object_type: ace.get_inherited_object_type().copied(),
-                            },
-                            fixed_location: Some(DelegationLocation::DefaultSecurityDescriptor(class_name.to_owned())),
-                        }, None)
-                    ],
-                });
+                res.entry(ace.get_trustee().to_owned()).or_insert(HashMap::new())
+                    .entry(DelegationLocation::DefaultSecurityDescriptor(class_name.to_owned()))
+                    .or_insert(vec![])
+                    .push(ace.to_owned());
             }
         }
     }
     res
 }
 
-pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &str, forest_sid: &Sid, schema: &Schema, adminsdholder_sd: &SecurityDescriptor) -> Result<Vec<Delegation>, LdapError> {
-    // Get a list of legitimate object owners, which are highly-privileged groups
-    // or principals which can compromise the entire forest in all cases.
-    let allowed_owner_sids: HashSet<Sid> = HashSet::from([
-        Sid::try_from("S-1-5-18").expect("invalid SID"), // LocalSystem is owner of system objects
-        Sid::try_from("S-1-5-32-544").expect("invalid SID"), // objects created by Administrators members are owned by Administrators
-    ]);
-    let allowed_owner_rids = HashSet::from([
-        500, // the builtin Administrator account should never be de-privileged, don't flag it
-        512, // objects created by Domain Admins members are owned by Domain Admins
-        518, // Schema admins
-        519, // Enterprise Admins
-    ]);
+pub(crate) fn get_explicit_aces(conn: &LdapConnection, naming_context: &str, forest_sid: &Sid, schema: &Schema, adminsdholder_sd: &SecurityDescriptor) -> Result<HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>>, LdapError> {
     let allowed_control_accesses = [
         "apply group policy", // applying a group policy does not mean we control it
         "change password", // changing password requires knowing the current password
@@ -214,10 +342,10 @@ pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &s
 
     let adminsdholder_aces: HashSet<Ace> = HashSet::from_iter(adminsdholder_sd.dacl.as_ref().unwrap().aces.iter().cloned());
 
-    let mut res = vec![];
+    let mut res = HashMap::new();
 
     let mut sd_control_val = BerVal::new();
-    sd_control_val.append(BerEncodable::Sequence(vec![BerEncodable::Integer((OWNER_SECURITY_INFORMATION.0 | DACL_SECURITY_INFORMATION.0).into())]));
+    sd_control_val.append(BerEncodable::Sequence(vec![BerEncodable::Integer((DACL_SECURITY_INFORMATION.0).into())]));
     let sd_control = LdapControl::new(
         LDAP_SERVER_SD_FLAGS_OID,
         &sd_control_val,
@@ -233,26 +361,11 @@ pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &s
         let entry = entry?;
         let admincount = get_attr_str(&[&entry], &entry.dn, "admincount").unwrap_or("0".to_owned());
         let sd = get_attr_sd(&[&entry], &entry.dn, "ntsecuritydescriptor")?;
-        let owner = sd.owner.expect("assertion failed: object without an owner");
         let dacl = sd.dacl.expect("assertion failed: object without a DACL");
 
         // Check if the DACL is in canonical order
         if let Err(ace) = dacl.check_canonicality() {
             eprintln!(" [!] ACL of {} is not in canonical order, fix ACE: {:?}", entry.dn, ace);
-        }
-
-        // Check if the owner of this object is Administrators or Domain Admins (the two
-        // SIDs which get the SE_GROUP_OWNER flag)
-        if !allowed_owner_sids.contains(&owner) && !allowed_owner_rids.contains(&owner.get_rid()) {
-            res.push(Delegation {
-                trustee: DelegationTrustee::Sid(owner.to_owned()),
-                templates: vec![
-                    (DelegationTemplate {
-                        rights: DelegationRights::Ownership,
-                        fixed_location: None,
-                    }, Some(DelegationLocation::DN(entry.dn.to_owned()))),
-                ],
-            });
         }
 
         let classes = get_attr_strs(&[&entry], &entry.dn, "objectclass")?;
@@ -332,23 +445,10 @@ pub(crate) fn get_explicit_delegations(conn: &LdapConnection, naming_context: &s
                 continue;
             }
 
-            res.push(Delegation {
-                trustee: DelegationTrustee::Sid(ace.get_trustee().to_owned()),
-                templates: vec![
-                    (DelegationTemplate {
-                        rights: DelegationRights::Ace {
-                            access_mask: ace.get_mask(),
-                            container_inherit: ace.get_container_inherit(),
-                            object_inherit: ace.get_object_inherit(),
-                            inherit_only: ace.get_inherit_only(),
-                            no_propagate: ace.get_no_propagate(),
-                            object_type: ace.get_object_type().copied(),
-                            inherited_object_type: ace.get_inherited_object_type().copied(),
-                        },
-                        fixed_location: None,
-                    }, Some(DelegationLocation::DN(entry.dn.to_owned()))),
-                ],
-            });
+            res.entry(ace.get_trustee().to_owned()).or_insert(HashMap::new())
+                .entry(DelegationLocation::DomainDn(entry.dn.to_owned()))
+                .or_insert(vec![])
+                .push(ace.to_owned());
         }
     }
     Ok(res)

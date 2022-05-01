@@ -1,14 +1,15 @@
 mod utils;
 mod schema;
 mod delegations;
-use std::io::BufReader;
-use std::fs::File;
+use std::collections::HashMap;
+
+use authz::{Ace, Sid};
+use delegations::{DelegationLocation, DelegationTemplate};
 use winldap::connection::{LdapConnection, LdapCredentials};
 use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
-use serde_json;
 use crate::schema::Schema;
-use crate::delegations::{Delegation, get_explicit_delegations, get_schema_delegations};
+use crate::delegations::{get_explicit_aces, get_schema_aces, Delegation};
 use crate::utils::{get_forest_sid, get_adminsdholder_sd};
 
 fn main() {
@@ -55,37 +56,25 @@ fn main() {
                 .requires_all(&["domain","username"])
         )
         .arg(
-            Arg::new("deleg_file")
-                .value_name("FILE")
+            Arg::new("templates")
+                .help("json file with delegation templates")
+                .long("templates")
+                .short('t')
+                .value_name("T.json")
                 .multiple_occurrences(true)
-                .help("json file with delegation templates and/or actual delegations")
+                .number_of_values(1)
+        )
+        .arg(
+            Arg::new("delegations")
+                .help("json file with delegations")
+                .long("delegations")
+                .short('D')
+                .value_name("D.json")
+                .multiple_occurrences(true)
                 .number_of_values(1)
         );
 
     let args = app.get_matches();
-
-    let base_delegations: Vec<Delegation> = {
-        let mut res = vec![];
-        let input_filepaths: Vec<&str> = args.values_of("deleg_file").unwrap().collect();
-        for input_filepath in &input_filepaths {
-            let file = match File::open(input_filepath) {
-                Ok(f) => f,
-                Err(e) => {
-                    eprintln!(" [!] Unable to open file {} : {}", input_filepath, e);
-                    std::process::exit(1);
-                }
-            };
-            let reader = BufReader::new(file);
-            match serde_json::from_reader(reader) {
-                Ok(mut v) => res.append(&mut v),
-                Err(e) => {
-                    eprintln!(" [!] Unable to parse file {} : {}", input_filepath, e);
-                    std::process::exit(1);
-                }
-            }
-        }
-        res
-    };
 
     let server= args.value_of("server");
     let port = args.value_of("port").expect("no port set");
@@ -141,14 +130,70 @@ fn main() {
         }
     };
 
-    let mut delegations = vec![];
-    
-    delegations.append(&mut get_schema_delegations(&schema, &forest_sid));
+    let templates: HashMap<String, DelegationTemplate> = {
+        let mut res = HashMap::new();
+        if let Some(input_filepaths) = args.values_of("templates") {
+            for input_filepath in input_filepaths.into_iter() {
+                let json = match std::fs::read_to_string(input_filepath) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        eprintln!(" [!] Unable to open file {} : {}", input_filepath, e);
+                        std::process::exit(1);
+                    }
+                };
+                match DelegationTemplate::from_json(&json, &schema) {
+                    Ok(v) => {
+                        for model in v.into_iter() {
+                            res.insert(model.name.clone(), model);
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!(" [!] Unable to parse template file {} : {}", input_filepath, e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+        res
+    };
+
+    let delegations: Vec<Delegation> = {
+        let mut res = vec![];
+        if let Some(input_files) = args.values_of("delegations") {
+            for input_filepath in input_files.into_iter() {
+                let json = match std::fs::read_to_string(input_filepath) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        eprintln!(" [!] Unable to open file {} : {}", input_filepath, e);
+                        std::process::exit(1);
+                    }
+                };
+                match Delegation::from_json(&json, ) {
+                    Ok(mut v) => res.append(&mut v),
+                    Err(e) => {
+                        eprintln!(" [!] Unable to parse delegation file {} : {}", input_filepath, e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+        res
+    };
+
+    let mut aces_found: HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>> = get_schema_aces(&schema, &forest_sid);
 
     for naming_context in conn.get_naming_contexts() {
         println!("Fetching security descriptors of naming context {}", naming_context);
-        match get_explicit_delegations(&conn, naming_context, &forest_sid, &schema, &adminsdholder_sd) {
-            Ok(mut h) => delegations.append(&mut h),
+        match get_explicit_aces(&conn, naming_context, &forest_sid, &schema, &adminsdholder_sd) {
+            Ok( sids) => {
+                for (sid, locations) in sids.into_iter() {
+                    for (location, mut aces) in locations.into_iter() {
+                        aces_found.entry(sid.clone()).or_insert(HashMap::new())
+                            .entry(location).or_insert(vec![])
+                            .append(&mut aces);
+                    }
+                }
+            },
             Err(e) => {
                 eprintln!(" [!] Error when fetching security descriptors of naming context {} : {}", naming_context, e);
                 std::process::exit(1);
@@ -157,21 +202,16 @@ fn main() {
     }
 
     if let Err(e) = conn.destroy() {
-        eprintln!("Error when closing connection to \"{}:{}\" : {}", server.unwrap_or("default"), port, e);
+        eprintln!("Error when closing connection to \"{}:{}\" : {}", server.unwrap_or(""), port, e);
         std::process::exit(1);
     }
 
-    for deleg in &delegations {
-        let mut found = false;
-        for base_deleg in &base_delegations {
-            if deleg.is_instance_of(&base_deleg) {
-                found = true;
-                break;
+    for (trustee, locations) in &aces_found {
+        for (location, aces) in locations {
+            eprintln!(" [!] {} on {:?} has ACEs:", trustee, location);
+            for ace in aces {
+                eprintln!("          {}", ace);
             }
         }
-        if found {
-            continue;
-        }
-        println!("\n{}", serde_json::to_string_pretty(deleg).unwrap());
     }
 }
