@@ -217,7 +217,8 @@ pub(crate) fn pretty_print_access_rights(mask: u32) -> String {
 }
 
 pub(crate) fn pretty_print_ace(ace: &Ace, schema: &Schema) -> String {
-    let mut res = format!("{} access mask 0x{:X} ({})", ace.get_trustee(), ace.get_mask(), pretty_print_access_rights(ace.get_mask()));
+    let mut res = format!("{} access mask 0x{:X} ({})", &ace.trustee, &ace.access_mask,
+        pretty_print_access_rights(ace.access_mask));
     match &ace.type_specific {
         AceType::AccessAllowed { .. } | AceType::AccessAllowedObject { object_type: None, .. } => (),
         AceType::AccessAllowedObject { object_type: Some(guid), .. } => {

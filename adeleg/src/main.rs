@@ -10,7 +10,7 @@ use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
 use crate::schema::Schema;
 use crate::delegations::{get_explicit_aces, get_schema_aces, Delegation};
-use crate::utils::{get_forest_sid, get_adminsdholder_sd};
+use crate::utils::{get_forest_sid, get_adminsdholder_sd, pretty_print_ace};
 
 fn main() {
     let default_port = format!("{}", LDAP_PORT);
@@ -168,7 +168,7 @@ fn main() {
                         std::process::exit(1);
                     }
                 };
-                match Delegation::from_json(&json, ) {
+                match Delegation::from_json(&json, &templates) {
                     Ok(mut v) => res.append(&mut v),
                     Err(e) => {
                         eprintln!(" [!] Unable to parse delegation file {} : {}", input_filepath, e);
@@ -206,12 +206,69 @@ fn main() {
         std::process::exit(1);
     }
 
+    // Check which ACEs are explained by a delegation passed to us as input
+    let mut delegations_in_input: HashMap<Sid, HashMap<DelegationLocation, Vec<(Delegation, Vec<Ace>)>>> = HashMap::new();
+    for delegation in &delegations {
+        for (location, aces) in delegation.derive_aces() {
+            let sid = aces.get(0).expect("delegations should have at least one ACE").trustee.clone();
+            delegations_in_input.entry(sid).or_insert(HashMap::new())
+                .entry(location).or_insert(vec![])
+                .push((delegation.clone(), aces));
+        }
+    }
+
     for (trustee, locations) in &aces_found {
         for (location, aces) in locations {
-            eprintln!(" [!] {} on {:?} has ACEs:", trustee, location);
-            for ace in aces {
-                eprintln!("          {}", ace);
+            let mut aces_explained: Vec<bool> = aces.iter().map(|_| false).collect();
+
+            let expected_delegations = delegations_in_input.get(trustee)
+                .and_then(|h| h.get(&location).map(|v| v.as_slice()))
+                .unwrap_or(&[]);
+
+            for (_, expected_aces) in expected_delegations {
+                if is_ace_subset_and_in_order(&aces, &expected_aces) {
+                    for ace in expected_aces {
+                        aces_explained[aces.iter().position(|a| a == ace).unwrap()] = true;
+                    }
+                }
+            }
+
+            if aces_explained.iter().any(|b| !*b) {
+                println!("====== Considering {} on {:?}", &trustee, &location);
+
+                eprintln!(" [.] Expected ACEs:");
+                for (delegation, aces) in expected_delegations {
+                    for ace in aces {
+                        eprintln!("          {:?} (from {})", pretty_print_ace(ace, &schema), delegation.template_name);
+                    }
+                }
+
+                eprintln!(" [.] ACEs found:");
+                for (i, ace) in aces.iter().enumerate() {
+                    eprintln!("          {} {}", if aces_explained[i] { "[OK]" } else { "[!!]" }, pretty_print_ace(ace, &schema));
+                }
             }
         }
     }
+}
+
+fn is_ace_subset_and_in_order(needle: &[Ace], haystack: &[Ace]) -> bool {
+    let mut iter = haystack.iter();
+    for needle_ace in needle {
+        let mut found = false;
+        loop {
+            if let Some(haystack_ace) = iter.next() {
+                if haystack_ace == needle_ace {
+                    found = true;
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        if !found {
+            return false;
+        }
+    }
+    true
 }
