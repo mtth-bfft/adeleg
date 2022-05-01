@@ -20,6 +20,8 @@ pub struct Schema {
     pub(crate) attribute_guids: HashMap<Guid, String>,
     // Mapping from property set GUIDs to property set names
     pub(crate) property_set_names: HashMap<Guid, String>,
+    // Mapping from validated write GUIDs to validated write names
+    pub(crate) validated_write_names: HashMap<Guid, String>,
     // Mapping from control access GUIDs to control access names
     pub(crate) control_access_names: HashMap<Guid, String>,
 }
@@ -30,6 +32,7 @@ impl Schema {
         let mut class_default_sd = HashMap::new();
         let mut attribute_guids = HashMap::new();
         let mut property_set_names = HashMap::new();
+        let mut validated_write_names = HashMap::new();
         let mut control_access_names = HashMap::new();
 
         let forest_sid = get_forest_sid(conn)?;
@@ -92,6 +95,21 @@ impl Schema {
             property_set_names.insert(guid, name);
         }
 
+        // Fetch validated writes (validAccesses = SELF)
+        let search = LdapSearch::new(&conn, Some(conn.get_configuration_naming_context()), LDAP_SCOPE_SUBTREE,
+        Some("(&(objectClass=controlAccessRight)(validAccesses=8)(rightsGuid=*))"),
+        Some(&[
+            "rightsGuid",
+            "displayName",
+        ]), &[]);
+        for entry in search {
+            let entry = entry?;
+            let guid = get_attr_str(&[&entry], &entry.dn, "rightsguid")?;
+            let guid = Guid::try_from(guid.as_str()).expect("unable to parse validated write rightsGuid as GUID");
+            let name = get_attr_str(&[&entry], &entry.dn, "displayname")?;
+            validated_write_names.insert(guid, name);
+        }
+
         // Fetch control access rights (validAccesses = CONTROL_ACCESS)
         let search = LdapSearch::new(&conn, Some(conn.get_configuration_naming_context()), LDAP_SCOPE_SUBTREE,
                                     Some("(&(objectClass=controlAccessRight)(validAccesses=256)(rightsGuid=*))"),
@@ -108,6 +126,13 @@ impl Schema {
         }
 
 
-        Ok(Self { class_guids, class_default_sd, attribute_guids, property_set_names, control_access_names })
+        Ok(Self {
+            class_guids,
+            class_default_sd,
+            attribute_guids,
+            property_set_names,
+            validated_write_names,
+            control_access_names,
+        })
     }
 }
