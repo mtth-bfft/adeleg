@@ -296,6 +296,18 @@ impl Ace {
 impl Display for Ace {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
         write!(f, "{} access mask 0x{:X}", &self.trustee, &self.access_mask)?;
+        if self.get_no_propagate() {
+            write!(f, " no_propagate")?;
+        }
+        if self.get_inherit_only() {
+            write!(f, " inherit_only")?;
+        }
+        if self.get_object_inherit() {
+            write!(f, " object_inherit")?;
+        }
+        if self.get_container_inherit() {
+            write!(f, " container_inherit")?;
+        }
         if let AceType::AccessAllowedObject { object_type: Some(guid), .. } = &self.type_specific {
             write!(f, " obj_type={}", guid)?;
         }
