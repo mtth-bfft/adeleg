@@ -414,7 +414,9 @@ pub fn is_ace_part_of_a_delegation(ace: &Ace, default_aces: &[Ace], admincount: 
     ]);
     let ignored_control_accesses = [
         "apply group policy", // applying a group policy does not mean we control it
+        "send to", // sending email to people does not mean we control them
         "change password", // changing password requires knowing the current password
+        "query self quota", // if an attacker can impersonate a user, querying their quota is the least of their worries
         "allow a dc to create a clone of itself", // if an attacker can impersonate a DC, cloning to a new DC is the least of your worries
     ];
     let everyone = Sid::try_from("S-1-1-0").expect("invalid SID");
