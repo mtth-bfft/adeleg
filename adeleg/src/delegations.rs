@@ -29,7 +29,7 @@ fn true_by_default() -> bool {
 pub enum DelegationTrustee {
     Sid(Sid),
     DomainRid(u32),
-    //TODO: RootDomainRid(u32),
+    RootDomainRid(u32),
     //TODO: UPN(String),
     //TODO: SamAccountName(String),
     //TODO: DN(String),
@@ -192,6 +192,7 @@ impl Delegation {
                             },
                         }
                     },
+                    DelegationTrustee::RootDomainRid(r) => vec![forest_sid.with_rid(*r)],
                 };
                 let mut flags = 0;
                 if ace.container_inherit {
