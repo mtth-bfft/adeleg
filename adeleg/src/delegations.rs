@@ -322,7 +322,7 @@ impl DelegationTemplate {
     }
 }
 
-pub(crate) fn get_schema_aces(schema: &Schema, forest_sid: &Sid) -> HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>> {
+pub(crate) fn get_schema_aces(schema: &Schema, forest_sid: &Sid, ignored_trustee_sids: &HashSet<Sid>) -> HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>> {
     let mut res = HashMap::new();
     let default_sds = schema.class_default_sd.get(forest_sid).unwrap();
     for (class_name, default_sd) in default_sds {
@@ -333,8 +333,7 @@ pub(crate) fn get_schema_aces(schema: &Schema, forest_sid: &Sid) -> HashMap<Sid,
                         false,
                         &[],
                         &schema,
-                        forest_sid,
-                        forest_sid) {
+                        ignored_trustee_sids) {
                     continue;
                 }
 
@@ -348,7 +347,7 @@ pub(crate) fn get_schema_aces(schema: &Schema, forest_sid: &Sid) -> HashMap<Sid,
     res
 }
 
-pub(crate) fn get_explicit_aces(conn: &LdapConnection, naming_context: &str, forest_sid: &Sid, schema: &Schema, adminsdholder_sd: &SecurityDescriptor) -> Result<HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>>, LdapError> {
+pub(crate) fn get_explicit_aces(conn: &LdapConnection, naming_context: &str, forest_sid: &Sid, schema: &Schema, adminsdholder_sd: &SecurityDescriptor, ignored_trustee_sids: &HashSet<Sid>) -> Result<HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>>, LdapError> {
     let domain_sid = get_domain_sid(conn, naming_context);
     let default_sd = schema.class_default_sd.get(domain_sid.as_ref().unwrap_or(forest_sid)).expect("domain SID without defaultSecurityDescriptors");
     let adminsdholder_aces: &[Ace] = adminsdholder_sd.dacl.as_ref().map(|d| &d.aces[..]).unwrap_or(&[]);
@@ -399,8 +398,7 @@ pub(crate) fn get_explicit_aces(conn: &LdapConnection, naming_context: &str, for
                     admincount,
                     &adminsdholder_aces[..],
                     &schema,
-                    &domain_sid.as_ref().unwrap_or(forest_sid),
-                    &forest_sid) {
+                    &ignored_trustee_sids) {
                 continue;
             }
             res.entry(ace.trustee.clone()).or_insert(HashMap::new())
@@ -411,28 +409,13 @@ pub(crate) fn get_explicit_aces(conn: &LdapConnection, naming_context: &str, for
     Ok(res)
 }
 
-pub fn is_ace_part_of_a_delegation(ace: &Ace, default_aces: &[Ace], admincount: bool, adminsdholder_aces: &[Ace], schema: &Schema, domain_sid: &Sid, forest_sid: &Sid) -> bool {
-    let ignored_trustee_sids: HashSet<Sid> = HashSet::from([
-        Sid::try_from("S-1-5-10").expect("invalid SID"),     // SELF
-        Sid::try_from("S-1-3-0").expect("invalid SID"),      // Creator Owner
-        Sid::try_from("S-1-5-18").expect("invalid SID"),     // Local System
-        Sid::try_from("S-1-5-20").expect("invalid SID"),     // Network Service
-        Sid::try_from("S-1-5-32-544").expect("invalid SID"), // Administrators
-        Sid::try_from("S-1-5-9").expect("invalid SID"),      // Enterprise Domain Controllers
-        Sid::try_from("S-1-5-32-548").expect("invalid SID"), // Account Operators
-        Sid::try_from("S-1-5-32-549").expect("invalid SID"), // Server Operators
-        Sid::try_from("S-1-5-32-550").expect("invalid SID"), // Print Operators
-        Sid::try_from("S-1-5-32-551").expect("invalid SID"), // Backup Operators
-        domain_sid.with_rid(512),                                // Domain Admins
-        domain_sid.with_rid(516),                                // Domain Controllers
-        forest_sid.with_rid(518),                                // Schema Admins
-        forest_sid.with_rid(519),                                // Enterprise Admins
-    ]);
+pub fn is_ace_part_of_a_delegation(ace: &Ace, default_aces: &[Ace], admincount: bool, adminsdholder_aces: &[Ace], schema: &Schema, ignored_trustee_sids: &HashSet<Sid>) -> bool {
     let ignored_control_accesses = [
         "apply group policy", // applying a group policy does not mean we control it
         "send to", // sending email to people does not mean we control them
         "change password", // changing password requires knowing the current password
         "query self quota", // if an attacker can impersonate a user, querying their quota is the least of their worries
+        "open address list", // listing address books is not a control path
         "allow a dc to create a clone of itself", // if an attacker can impersonate a DC, cloning to a new DC is the least of your worries
     ];
     let everyone = Sid::try_from("S-1-1-0").expect("invalid SID");

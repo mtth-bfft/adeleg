@@ -194,11 +194,30 @@ fn main() {
         }
     }
 
-    let mut aces_found: HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>> = get_schema_aces(&schema, &forest_sid);
+    // Derive a list of trustees to ignore
+    let mut ignored_trustee_sids: HashSet<Sid> = HashSet::from([
+        Sid::try_from("S-1-5-10").expect("invalid SID"),     // SELF
+        Sid::try_from("S-1-3-0").expect("invalid SID"),      // Creator Owner
+        Sid::try_from("S-1-5-18").expect("invalid SID"),     // Local System
+        Sid::try_from("S-1-5-20").expect("invalid SID"),     // Network Service
+        Sid::try_from("S-1-5-32-544").expect("invalid SID"), // Administrators
+        Sid::try_from("S-1-5-9").expect("invalid SID"),      // Enterprise Domain Controllers
+        Sid::try_from("S-1-5-32-548").expect("invalid SID"), // Account Operators
+        Sid::try_from("S-1-5-32-549").expect("invalid SID"), // Server Operators
+        Sid::try_from("S-1-5-32-550").expect("invalid SID"), // Print Operators
+        Sid::try_from("S-1-5-32-551").expect("invalid SID"), // Backup Operators
+    ]);
+    for domain_sid in domain_sids {
+        ignored_trustee_sids.insert(domain_sid.with_rid(512));   // Domain Admins
+        ignored_trustee_sids.insert(domain_sid.with_rid(516));   // Domain Controllers
+        ignored_trustee_sids.insert(domain_sid.with_rid(518));   // Schema Admins
+        ignored_trustee_sids.insert(domain_sid.with_rid(519));   // Enterprise Admins
+    }
 
+    let mut aces_found: HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>> = get_schema_aces(&schema, &forest_sid, &ignored_trustee_sids);
     for naming_context in conn.get_naming_contexts() {
         println!("Fetching security descriptors of naming context {}", naming_context);
-        match get_explicit_aces(&conn, naming_context, &forest_sid, &schema, &adminsdholder_sd) {
+        match get_explicit_aces(&conn, naming_context, &forest_sid, &schema, &adminsdholder_sd, &ignored_trustee_sids) {
             Ok( sids) => {
                 for (sid, locations) in sids.into_iter() {
                     for (location, mut aces) in locations.into_iter() {
@@ -249,6 +268,8 @@ fn main() {
                 for (i, ace) in aces.iter().enumerate() {
                     eprintln!("          {} {}", if aces_explained[i] { "[OK]" } else { "[!!]" }, pretty_print_ace(ace, &schema));
                 }
+
+                eprintln!("");
             }
         }
     }
