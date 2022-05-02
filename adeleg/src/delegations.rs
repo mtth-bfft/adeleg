@@ -37,6 +37,7 @@ pub enum DelegationTrustee {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Eq)]
 #[serde(rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub enum DelegationLocation {
     // In the schema partition, in the defaultSecurityDescriptor attribute of a given class name
     DefaultSecurityDescriptor(String),
@@ -49,6 +50,12 @@ pub enum DelegationLocation {
     // Only used for delegations which are not delegated on a particular object
     // and only use fixed_location fields in DelegationAce.
     Global,
+}
+
+impl Default for DelegationLocation {
+    fn default() -> Self {
+        Self::Global
+    }
 }
 
 impl PartialEq for DelegationLocation {
@@ -92,6 +99,7 @@ impl core::hash::Hash for DelegationLocation {
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Hash)]
 #[serde(rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub enum TemplateResourceFilter {
     // An unspecified location only restricted to some object class(es)
     AnyInstanceOf(Vec<String>),
@@ -102,6 +110,7 @@ pub enum TemplateResourceFilter {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct DelegationAce {
     #[serde(skip_serializing_if = "is_default")]
     #[serde(default)]
@@ -120,6 +129,7 @@ pub struct DelegationAce {
     pub inherited_object_type: Option<Guid>,
     #[serde(skip_serializing_if = "is_default")]
     #[serde(default)]
+    #[serde(rename = "inherited_object_type")]
     pub inherited_object_type_name: Option<String>,
     #[serde(skip_serializing_if = "is_default")]
     #[serde(default)]
@@ -136,20 +146,26 @@ pub struct DelegationAce {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct DelegationTemplate {
     pub(crate) name: String,
     pub(crate) description: String,
-    pub(crate) resource: TemplateResourceFilter,
+    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default)]
+    pub(crate) resource: Option<TemplateResourceFilter>,
     pub(crate) rights: Vec<DelegationAce>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Delegation {
     pub(crate) trustee: DelegationTrustee,
     #[serde(rename = "template")]
     pub(crate) template_name: String,
     #[serde(skip)]
     pub(crate) template: Option<DelegationTemplate>,
+    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default)]
     pub(crate) resource: DelegationLocation,
 }
 
