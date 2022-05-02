@@ -3,7 +3,7 @@ use winldap::utils::get_attr_str;
 use std::collections::{HashSet, HashMap};
 use authz::{SecurityDescriptor, Sid};
 use serde::{Serialize, Deserialize};
-use crate::{utils::{get_attr_sd, get_domain_sid}, schema::Schema};
+use crate::{utils::{get_attr_sd, get_domain_sid, strip_naming_context}, schema::Schema};
 use winldap::connection::LdapConnection;
 use winldap::utils::get_attr_strs;
 use winldap::error::LdapError;
@@ -370,11 +370,11 @@ pub(crate) fn get_explicit_aces(conn: &LdapConnection, naming_context: &str, for
             .unwrap_or(&[]);
 
         let here = if entry.dn.ends_with(conn.get_configuration_naming_context()) {
-            DelegationLocation::ConfigurationDn(entry.dn.to_lowercase().replace(&format!(",{}", conn.get_configuration_naming_context().to_lowercase()), ""))
+            DelegationLocation::ConfigurationDn(strip_naming_context(&entry.dn, conn.get_configuration_naming_context()).to_owned())
         } else if entry.dn.ends_with(conn.get_schema_naming_context()) {
-            DelegationLocation::SchemaDn(entry.dn.to_lowercase().replace(&format!(",{}", conn.get_schema_naming_context().to_lowercase()), ""))
+            DelegationLocation::SchemaDn(strip_naming_context(&entry.dn, conn.get_schema_naming_context()).to_owned())
         } else {
-            DelegationLocation::DomainDn(entry.dn.to_lowercase().replace(&format!(",{}", &naming_context.to_lowercase()), ""))
+            DelegationLocation::DomainDn(strip_naming_context(&entry.dn, &naming_context).to_owned())
         };
 
         for ace in &dacl.aces {

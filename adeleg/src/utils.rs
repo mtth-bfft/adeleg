@@ -262,3 +262,11 @@ pub(crate) fn pretty_print_ace(ace: &Ace, schema: &Schema) -> String {
     }
     res
 }
+
+pub(crate) fn strip_naming_context<'a>(dn: &'a str, naming_context: &str) -> &'a str {
+    if dn.to_lowercase().ends_with(&naming_context.to_lowercase()) && dn.is_char_boundary(dn.len() - naming_context.len()) {
+        &dn[..dn.len() - naming_context.len()].trim_end_matches(',')
+    } else {
+        &dn[..]
+    }
+}
