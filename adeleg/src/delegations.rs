@@ -28,7 +28,8 @@ fn true_by_default() -> bool {
 #[serde(deny_unknown_fields)]
 pub enum DelegationTrustee {
     Sid(Sid),
-    //TODO: Rid(u32),
+    DomainRid(u32),
+    //TODO: RootDomainRid(u32),
     //TODO: UPN(String),
     //TODO: SamAccountName(String),
     //TODO: DN(String),
@@ -168,7 +169,7 @@ impl Delegation {
         Ok(res)
     }
 
-    pub fn derive_aces(&self) -> HashMap<DelegationLocation, Vec<Ace>> {
+    pub fn derive_aces(&self, forest_sid: &Sid, domain_sids: &HashSet<Sid>) -> HashMap<DelegationLocation, Vec<Ace>> {
         let mut res = HashMap::new();
 
         if let Some(template) = &self.template {
@@ -178,8 +179,19 @@ impl Delegation {
                 } else {
                     self.resource.clone()
                 };
-                let trustee = match &self.trustee {
-                    DelegationTrustee::Sid(s) => s.clone(),
+                let trustees = match &self.trustee {
+                    DelegationTrustee::Sid(s) => vec![s.clone()],
+                    DelegationTrustee::DomainRid(r) => {
+                        match &location {
+                            DelegationLocation::DefaultSecurityDescriptor(_) |
+                                DelegationLocation::ConfigurationDn(_) |
+                                DelegationLocation::SchemaDn(_) |
+                                DelegationLocation::Global => vec![forest_sid.with_rid(*r)],
+                            DelegationLocation::DomainDn(_) => {
+                                domain_sids.iter().map(|s| s.with_rid(*r)).collect()
+                            },
+                        }
+                    },
                 };
                 let mut flags = 0;
                 if ace.container_inherit {
@@ -208,13 +220,15 @@ impl Delegation {
                         inherited_object_type,
                     },
                 };
-                let ace = Ace {
-                    trustee,
-                    flags,
-                    access_mask: ace.access_mask,
-                    type_specific,
-                };
-                res.entry(location).or_insert(vec![]).push(ace);
+                for trustee in trustees {
+                    let ace = Ace {
+                        trustee,
+                        flags,
+                        access_mask: ace.access_mask,
+                        type_specific: type_specific.clone(),
+                    };
+                    res.entry(location.clone()).or_insert(vec![]).push(ace);
+                }
             }
         }
 

@@ -1,7 +1,7 @@
 mod utils;
 mod schema;
 mod delegations;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use authz::{Ace, Sid};
 use delegations::{DelegationLocation, DelegationTemplate};
@@ -10,7 +10,7 @@ use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
 use crate::schema::Schema;
 use crate::delegations::{get_explicit_aces, get_schema_aces, Delegation};
-use crate::utils::{get_forest_sid, get_adminsdholder_sd, pretty_print_ace};
+use crate::utils::{get_domain_sid, get_forest_sid, get_adminsdholder_sd, pretty_print_ace};
 
 fn main() {
     let default_port = format!("{}", LDAP_PORT);
@@ -114,6 +114,10 @@ fn main() {
         }
     };
 
+    let domain_sids = conn.get_naming_contexts().iter()
+        .map(|nc| get_domain_sid(&conn, nc).unwrap_or(forest_sid.clone()))
+        .collect::<HashSet<Sid>>();
+
     let adminsdholder_sd = match get_adminsdholder_sd(&conn) {
         Ok(s) => s,
         Err(e) => {
@@ -179,6 +183,16 @@ fn main() {
         }
         res
     };
+    // Derive expected ACEs from these delegations, and index these ACEs by Sid then Location
+    let mut delegations_in_input: HashMap<Sid, HashMap<DelegationLocation, Vec<(Delegation, Vec<Ace>)>>> = HashMap::new();
+    for delegation in &delegations {
+        for (location, aces) in delegation.derive_aces(&forest_sid, &domain_sids) {
+            let sid = aces.get(0).expect("delegations should have at least one ACE").trustee.clone();
+            delegations_in_input.entry(sid).or_insert(HashMap::new())
+                .entry(location).or_insert(vec![])
+                .push((delegation.clone(), aces));
+        }
+    }
 
     let mut aces_found: HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>> = get_schema_aces(&schema, &forest_sid);
 
@@ -206,25 +220,13 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Check which ACEs are explained by a delegation passed to us as input
-    let mut delegations_in_input: HashMap<Sid, HashMap<DelegationLocation, Vec<(Delegation, Vec<Ace>)>>> = HashMap::new();
-    for delegation in &delegations {
-        for (location, aces) in delegation.derive_aces() {
-            let sid = aces.get(0).expect("delegations should have at least one ACE").trustee.clone();
-            delegations_in_input.entry(sid).or_insert(HashMap::new())
-                .entry(location).or_insert(vec![])
-                .push((delegation.clone(), aces));
-        }
-    }
-
     for (trustee, locations) in &aces_found {
         for (location, aces) in locations {
+            // Check which ACEs are explained by a delegation passed to us as input
             let mut aces_explained: Vec<bool> = aces.iter().map(|_| false).collect();
-
             let expected_delegations = delegations_in_input.get(trustee)
                 .and_then(|h| h.get(&location).map(|v| v.as_slice()))
                 .unwrap_or(&[]);
-
             for (_, expected_aces) in expected_delegations {
                 if is_ace_subset_and_in_order(&aces, &expected_aces) {
                     for ace in expected_aces {

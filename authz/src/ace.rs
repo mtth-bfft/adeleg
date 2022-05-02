@@ -13,7 +13,7 @@ pub struct Ace {
     pub type_specific: AceType,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum AceType {
     // Discretionnary access ACEs
     AccessAllowed,
