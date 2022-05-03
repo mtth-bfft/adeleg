@@ -68,6 +68,9 @@ pub enum LdapError {
     GetDNFailed {
         code: u32,
     },
+    GetDNSHostnameFailed {
+        code: u32,
+    },
 }
 
 impl Display for LdapError {
@@ -94,6 +97,7 @@ impl Display for LdapError {
             Self::GetFirstEntryFailed { code } => write!(f, "could not fetch a first result entry, {}", get_ldap_errmsg(*code)),
             Self::GetNextEntryFailed { code } => write!(f, "could not fetch the next result entry, {}", get_ldap_errmsg(*code)),
             Self::UnableToParseGuid { dn, attr_name, bytes } => write!(f, "unable to parse attribute {} of {} as guid: {:?}", attr_name, dn, bytes),
+            Self::GetDNSHostnameFailed { code } => write!(f, "could not fetch the remote server DNS hostname, {}", get_ldap_errmsg(*code)),
         }
     }
 }

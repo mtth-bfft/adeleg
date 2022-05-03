@@ -1,7 +1,7 @@
 use core::ptr::null_mut;
 use crate::error::LdapError;
 use windows::Win32::Foundation::PWSTR;
-use windows::Win32::Networking::Ldap::{ldap_initW, ldap_unbind, ldap_connect, LDAP_OPT_REFERRALS, LDAP_TIMEVAL, LDAP_SUCCESS, ldap_bind_sW, ldap, LDAP_SCOPE_BASE, ldap_set_option};
+use windows::Win32::Networking::Ldap::{ldap_initW, ldap_unbind, ldap_connect, LDAP_OPT_HOST_NAME, LDAP_OPT_REFERRALS, LDAP_TIMEVAL, LDAP_SUCCESS, ldap_bind_sW, ldap, LDAP_SCOPE_BASE, ldap_set_option, LDAP_OPT_GETDSNAME_FLAGS, ldap_get_option, ldap_get_optionW};
 use windows::Win32::System::Rpc::{SEC_WINNT_AUTH_IDENTITY_W, SEC_WINNT_AUTH_IDENTITY_UNICODE};
 use crate::utils::{get_ldap_errcode, str_to_wstr, get_attr_str, get_attr_strs};
 use crate::search::{LdapSearch, LdapEntry};
@@ -19,6 +19,7 @@ pub struct LdapCredentials<'a> {
 #[derive(Debug)]
 pub struct LdapConnection {
     pub(crate) handle: *mut ldap,
+    pub(crate) hostname: String,
     pub(crate) supported_controls: HashSet<String>,
     pub(crate) naming_contexts: Vec<String>,
     pub(crate) root_domain_naming_context: String,
@@ -44,6 +45,15 @@ impl LdapConnection {
         // Disable referrals altogether to allow using this tool from outside the domain.
         if unsafe { ldap_set_option(handle, LDAP_OPT_REFERRALS as i32, 0 as _) } != (LDAP_SUCCESS.0 as u32) {
             return Err(LdapError::ConnectionFailed(get_ldap_errcode()));
+        }
+
+        // When no server is explicitly requested, specify that we want a global catalog 
+        if server.is_none() {
+            // Flags are documented here: https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-nrpc/fb8e1146-a045-4c31-98d1-c68507ad5620
+            let dsname_flags: u32 = 1 << 25;
+            if unsafe { ldap_set_option(handle, LDAP_OPT_GETDSNAME_FLAGS as i32, &dsname_flags as *const _ as *const _) } != (LDAP_SUCCESS.0 as u32) {
+                return Err(LdapError::ConnectionFailed(get_ldap_errcode()));
+            }
         }
 
         // The actual connection timeout is much higher than that, since underlying
@@ -90,8 +100,27 @@ impl LdapConnection {
             return Err(LdapError::BindFailed(get_ldap_errcode()));
         }
 
+        let hostname = if let Some(server) = server {
+            server.to_owned()
+        } else {
+            unsafe {
+                let mut hostname_ptr: *mut u16 = null_mut();
+                let res = ldap_get_optionW(handle, LDAP_OPT_HOST_NAME as i32, &mut hostname_ptr as *mut _ as *mut _);
+                if res != LDAP_SUCCESS.0 as u32 {
+                    return Err(LdapError::GetDNSHostnameFailed { code: get_ldap_errcode() });
+                }
+                let mut len = 0;
+                while *(hostname_ptr.add(len)) != 0 {
+                    len += 1;
+                }
+                let slice = std::slice::from_raw_parts(hostname_ptr, len);
+                String::from_utf16_lossy(slice)
+            }
+        };
+
         let mut conn = Self {
             handle,
+            hostname,
             supported_controls: HashSet::new(),
             naming_contexts: Vec::new(),
             root_domain_naming_context: String::new(),
@@ -108,6 +137,10 @@ impl LdapConnection {
         conn.supported_controls = HashSet::from_iter(get_attr_strs(&rootdse, "(rootDSE)", "supportedcontrol")?.into_iter());
 
         Ok(conn)
+    }
+
+    pub fn get_hostname(&self) -> &str {
+        &self.hostname
     }
 
     pub fn get_errcode(&self) -> u32 {
