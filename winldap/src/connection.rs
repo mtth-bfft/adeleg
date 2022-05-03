@@ -39,6 +39,9 @@ impl LdapConnection {
             return Err(LdapError::ConnectionFailed(get_ldap_errcode()));
         }
 
+        // Server may return referrals to other naming contexts on itself
+        // which triggers DNS resolution attempts on the client, which may hang.
+        // Disable referrals altogether to allow using this tool from outside the domain.
         if unsafe { ldap_set_option(handle, LDAP_OPT_REFERRALS as i32, 0 as _) } != (LDAP_SUCCESS.0 as u32) {
             return Err(LdapError::ConnectionFailed(get_ldap_errcode()));
         }
