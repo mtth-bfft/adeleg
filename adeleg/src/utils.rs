@@ -270,3 +270,7 @@ pub(crate) fn strip_naming_context<'a>(dn: &'a str, naming_context: &str) -> &'a
         &dn[..]
     }
 }
+
+pub(crate) fn ends_with_case_insensitive(haystack: &str, needle: &str) -> bool {
+    haystack.to_lowercase().ends_with(&needle.to_lowercase())
+}
