@@ -3,7 +3,7 @@ use winldap::utils::get_attr_str;
 use std::collections::{HashSet, HashMap};
 use authz::{SecurityDescriptor, Sid};
 use serde::{Serialize, Deserialize};
-use crate::{utils::{get_attr_sd, get_domain_sid, strip_naming_context, ends_with_case_insensitive}, schema::Schema};
+use crate::{utils::{Domain, get_attr_sd, get_domain_sid, strip_naming_context, ends_with_case_insensitive, resolve_samaccountname_to_sid}, schema::Schema};
 use winldap::connection::LdapConnection;
 use winldap::utils::get_attr_strs;
 use winldap::error::LdapError;
@@ -30,8 +30,8 @@ pub enum DelegationTrustee {
     Sid(Sid),
     DomainRid(u32),
     RootDomainRid(u32),
+    SamAccountName(String),
     //TODO: UPN(String),
-    //TODO: SamAccountName(String),
     //TODO: DN(String),
 }
 
@@ -41,12 +41,8 @@ pub enum DelegationTrustee {
 pub enum DelegationLocation {
     // In the schema partition, in the defaultSecurityDescriptor attribute of a given class name
     DefaultSecurityDescriptor(String),
-    // In a domain partition, at the given relative DN
-    DomainDn(String),
-    // In the configuration partition, at the given relative DN
-    ConfigurationDn(String),
-    // In the schema partition, at the given relative DN
-    SchemaDn(String),
+    // In a partition, at the given absolute or relative DN.
+    Dn(String),
     // Only used for delegations which are not delegated on a particular object
     // and only use fixed_location fields in DelegationAce.
     Global,
@@ -62,9 +58,7 @@ impl PartialEq for DelegationLocation {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (DelegationLocation::DefaultSecurityDescriptor(a), DelegationLocation::DefaultSecurityDescriptor(b)) => a.to_lowercase() == b.to_lowercase(),
-            (DelegationLocation::DomainDn(a), DelegationLocation::DomainDn(b)) => a.to_lowercase() == b.to_lowercase(),
-            (DelegationLocation::ConfigurationDn(a), DelegationLocation::ConfigurationDn(b)) => a.to_lowercase() == b.to_lowercase(),
-            (DelegationLocation::SchemaDn(a), DelegationLocation::SchemaDn(b)) => a.to_lowercase() == b.to_lowercase(),
+            (DelegationLocation::Dn(a), DelegationLocation::Dn(b)) => a.to_lowercase() == b.to_lowercase(),
             (DelegationLocation::Global, DelegationLocation::Global) => true,
             _ => false,
         }
@@ -78,20 +72,12 @@ impl core::hash::Hash for DelegationLocation {
                 hasher.write_u8(1);
                 class_name.to_lowercase().hash(hasher);
             },
-            DelegationLocation::DomainDn(rdn) => {
+            DelegationLocation::Dn(dn_or_rdn) => {
                 hasher.write_u8(2);
-                rdn.to_lowercase().hash(hasher);
-            },
-            DelegationLocation::ConfigurationDn(rdn) => {
-                hasher.write_u8(3);
-                rdn.to_lowercase().hash(hasher);
-            },
-            DelegationLocation::SchemaDn(rdn) => {
-                hasher.write_u8(4);
-                rdn.to_lowercase().hash(hasher);
+                dn_or_rdn.to_lowercase().hash(hasher);
             },
             DelegationLocation::Global => {
-                hasher.write_u8(5);
+                hasher.write_u8(3);
             },
         }
     }
@@ -185,71 +171,116 @@ impl Delegation {
         Ok(res)
     }
 
-    pub fn derive_aces(&self, forest_sid: &Sid, domain_sids: &HashSet<Sid>) -> HashMap<DelegationLocation, Vec<Ace>> {
+    pub fn derive_aces(&self, conn: &LdapConnection, root_domain: &Domain, domains: &[Domain]) -> Result<HashMap<DelegationLocation, Vec<Ace>>, String> {
         let mut res = HashMap::new();
 
         if let Some(template) = &self.template {
             for ace in &template.rights {
+                // Specialize the delegation's location and trustee, if necessary (e.g. when the trustee is identified
+                // by samaccountname, resolve to a SID within the domain where the ACE will sit)
                 let location = if let Some(fixed_location) = &ace.fixed_location {
                     fixed_location.clone()
                 } else {
                     self.resource.clone()
                 };
-                let trustees = match &self.trustee {
-                    DelegationTrustee::Sid(s) => vec![s.clone()],
-                    DelegationTrustee::DomainRid(r) => {
-                        match &location {
-                            DelegationLocation::DefaultSecurityDescriptor(_) |
-                                DelegationLocation::ConfigurationDn(_) |
-                                DelegationLocation::SchemaDn(_) |
-                                DelegationLocation::Global => vec![forest_sid.with_rid(*r)],
-                            DelegationLocation::DomainDn(_) => {
-                                domain_sids.iter().map(|s| s.with_rid(*r)).collect()
-                            },
-                        }
-                    },
-                    DelegationTrustee::RootDomainRid(r) => vec![forest_sid.with_rid(*r)],
+                let locations = if let DelegationLocation::Dn(dn_or_rdn) = location {
+                    if ends_with_case_insensitive(&dn_or_rdn, "cn=configuration") {
+                        vec![DelegationLocation::Dn(format!("{},{}", dn_or_rdn, conn.get_configuration_naming_context()))]
+                    } else if ends_with_case_insensitive(&dn_or_rdn, "cn=schema") {
+                        vec![DelegationLocation::Dn(format!("{},{}", dn_or_rdn, conn.get_schema_naming_context()))]
+                    } else if ends_with_case_insensitive(&dn_or_rdn, "dc=domaindnszones") ||
+                            ends_with_case_insensitive(&dn_or_rdn, "dc=forestdnszones") {
+                        vec![DelegationLocation::Dn(format!("{},{}", dn_or_rdn, conn.get_root_domain_naming_context()))]
+                    } else {
+                        domains.iter().map(|d| DelegationLocation::Dn(format!("{},{}", dn_or_rdn, d.distinguished_name))).collect()
+                    }
+                } else {
+                    vec![location]
                 };
-                let mut flags = 0;
-                if ace.container_inherit {
-                    flags |= CONTAINER_INHERIT_ACE.0 as u8;
-                }
-                if ace.object_inherit {
-                    flags |= OBJECT_INHERIT_ACE.0 as u8;
-                }
-                if ace.inherit_only {
-                    flags |= INHERIT_ONLY_ACE.0 as u8;
-                }
-                if ace.no_propagate {
-                    flags |= NO_PROPAGATE_INHERIT_ACE.0 as u8;
-                }
-                let type_specific = match (ace.allow, ace.object_type, ace.inherited_object_type) {
-                    (true, None, None) => AceType::AccessAllowed,
-                    (true, object_type, inherited_object_type) => AceType::AccessAllowedObject {
-                        flags: if object_type.is_some() { ACE_OBJECT_TYPE_PRESENT.0 } else { 0 } | if inherited_object_type.is_some() { ACE_INHERITED_OBJECT_TYPE_PRESENT.0 } else { 0 },
-                        object_type,
-                        inherited_object_type,
-                    },
-                    (false, None, None) => AceType::AccessDenied,
-                    (false, object_type, inherited_object_type) => AceType::AccessDeniedObject {
-                        flags: if object_type.is_some() { ACE_OBJECT_TYPE_PRESENT.0 } else { 0 } | if inherited_object_type.is_some() { ACE_INHERITED_OBJECT_TYPE_PRESENT.0 } else { 0 },
-                        object_type,
-                        inherited_object_type,
-                    },
-                };
-                for trustee in trustees {
-                    let ace = Ace {
-                        trustee,
-                        flags,
-                        access_mask: ace.access_mask,
-                        type_specific: type_specific.clone(),
+                for location in locations {
+                    let trustees = match &self.trustee {
+                        DelegationTrustee::Sid(s) => vec![s.clone()],
+                        DelegationTrustee::DomainRid(r) => {
+                            match &location {
+                                DelegationLocation::DefaultSecurityDescriptor(_) |
+                                    DelegationLocation::Global => vec![root_domain.sid.with_rid(*r)],
+                                DelegationLocation::Dn(dn) => {
+                                    let mut domain = None;
+                                    for d in domains {
+                                        if ends_with_case_insensitive(dn, &d.distinguished_name) {
+                                            domain = Some(d);
+                                            break;
+                                        }
+                                    }
+                                    vec![domain.unwrap_or(&root_domain).sid.with_rid(*r)]
+                                },
+                            }
+                        },
+                        DelegationTrustee::RootDomainRid(r) => vec![root_domain.sid.with_rid(*r)],
+                        DelegationTrustee::SamAccountName(samaccountname) => {
+                            let domain = match &location {
+                                DelegationLocation::DefaultSecurityDescriptor(_) |
+                                    DelegationLocation::Global => root_domain,
+                                DelegationLocation::Dn(dn) => {
+                                    let mut domain = None;
+                                    for d in domains {
+                                        if ends_with_case_insensitive(dn, &d.distinguished_name) {
+                                            domain = Some(d);
+                                            break;
+                                        }
+                                    }
+                                    domain.unwrap_or(&root_domain)
+                                },
+                            };
+                            if let Ok(sid) = resolve_samaccountname_to_sid(conn, samaccountname, domain) {
+                                vec![sid]
+                            } else {
+                                return Err(format!("unresolved SamAccountName \"{}\\{}\" in {}",
+                                                   domain.netbios_name, samaccountname, domain.distinguished_name));
+                            }
+                        },
                     };
-                    res.entry(location.clone()).or_insert(vec![]).push(ace);
+
+                    let mut flags = 0;
+                    if ace.container_inherit {
+                        flags |= CONTAINER_INHERIT_ACE.0 as u8;
+                    }
+                    if ace.object_inherit {
+                        flags |= OBJECT_INHERIT_ACE.0 as u8;
+                    }
+                    if ace.inherit_only {
+                        flags |= INHERIT_ONLY_ACE.0 as u8;
+                    }
+                    if ace.no_propagate {
+                        flags |= NO_PROPAGATE_INHERIT_ACE.0 as u8;
+                    }
+                    let type_specific = match (ace.allow, ace.object_type, ace.inherited_object_type) {
+                        (true, None, None) => AceType::AccessAllowed,
+                        (true, object_type, inherited_object_type) => AceType::AccessAllowedObject {
+                            flags: if object_type.is_some() { ACE_OBJECT_TYPE_PRESENT.0 } else { 0 } | if inherited_object_type.is_some() { ACE_INHERITED_OBJECT_TYPE_PRESENT.0 } else { 0 },
+                            object_type,
+                            inherited_object_type,
+                        },
+                        (false, None, None) => AceType::AccessDenied,
+                        (false, object_type, inherited_object_type) => AceType::AccessDeniedObject {
+                            flags: if object_type.is_some() { ACE_OBJECT_TYPE_PRESENT.0 } else { 0 } | if inherited_object_type.is_some() { ACE_INHERITED_OBJECT_TYPE_PRESENT.0 } else { 0 },
+                            object_type,
+                            inherited_object_type,
+                        },
+                    };
+                    for trustee in trustees {
+                        res.entry(location.clone()).or_insert(vec![]).push(Ace {
+                            trustee,
+                            flags,
+                            access_mask: ace.access_mask,
+                            type_specific: type_specific.clone(),
+                        });
+                    }
                 }
             }
         }
 
-        res
+        Ok(res)
     }
 }
 
@@ -384,14 +415,7 @@ pub(crate) fn get_explicit_aces(conn: &LdapConnection, naming_context: &str, for
             .and_then(|sd| sd.dacl.as_ref().map(|acl| &acl.aces[..]))
             .unwrap_or(&[]);
 
-        let here = if ends_with_case_insensitive(&entry.dn, conn.get_configuration_naming_context()) {
-            DelegationLocation::ConfigurationDn(strip_naming_context(&entry.dn, conn.get_configuration_naming_context()).to_owned())
-        } else if ends_with_case_insensitive(&entry.dn, conn.get_schema_naming_context()) {
-            DelegationLocation::SchemaDn(strip_naming_context(&entry.dn, conn.get_schema_naming_context()).to_owned())
-        } else {
-            DelegationLocation::DomainDn(strip_naming_context(&entry.dn, &naming_context).to_owned())
-        };
-
+        let here = DelegationLocation::Dn(entry.dn.to_owned());
         for ace in &dacl.aces {
             if !is_ace_part_of_a_delegation(ace,
                     &default_aces,

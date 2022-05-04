@@ -4,9 +4,8 @@ use winldap::search::LdapSearch;
 use winldap::utils::get_attr_str;
 use windows::Win32::Networking::Ldap::LDAP_SCOPE_SUBTREE;
 use authz::{SecurityDescriptor, Sid, Guid};
-use std::collections::{HashMap, HashSet};
-
-use crate::utils::{get_domain_sid, get_forest_sid, get_attr_guid};
+use std::collections::HashMap;
+use crate::utils::get_attr_guid;
 
 pub struct Schema {
     // Mapping from class GUID to class name
@@ -27,16 +26,13 @@ pub struct Schema {
 }
 
 impl Schema {
-    pub fn query(conn: &LdapConnection) -> Result<Self, LdapError> {
+    pub fn query(conn: &LdapConnection, domain_sids: &[Sid], root_domain_sid: &Sid) -> Result<Self, LdapError> {
         let mut class_guids = HashMap::new();
         let mut class_default_sd = HashMap::new();
         let mut attribute_guids = HashMap::new();
         let mut property_set_names = HashMap::new();
         let mut validated_write_names = HashMap::new();
         let mut control_access_names = HashMap::new();
-
-        let forest_sid = get_forest_sid(conn)?;
-        let domain_sids = conn.get_naming_contexts().iter().map(|nc| get_domain_sid(&conn, nc).unwrap_or(forest_sid.clone())).collect::<HashSet<Sid>>();
 
         // Fetch classes
         let search = LdapSearch::new(&conn, Some(conn.get_schema_naming_context()), LDAP_SCOPE_SUBTREE,
@@ -53,8 +49,8 @@ impl Schema {
             class_guids.insert(guid, name.clone());
             // Not all classes have a default SDDL attribute (if they are not used as the most specialized class of any object)
             if let Ok(sddl) = get_attr_str(&[&entry], &entry.dn, "defaultsecuritydescriptor") {
-                for domain_sid in &domain_sids {
-                    let sd = SecurityDescriptor::from_str(&sddl, &domain_sid, &forest_sid).expect("unable to parse defaultSecurityDescriptor in schema");
+                for domain_sid in domain_sids {
+                    let sd = SecurityDescriptor::from_str(&sddl, &domain_sid, &root_domain_sid).expect("unable to parse defaultSecurityDescriptor in schema");
                     if let Some(default_acl) = &sd.dacl {
                         if let Err(ace) = default_acl.check_canonicality() {
                             eprintln!(" [!] Default ACL of class {} at {} is not in canonical order, fix ACE: {:?}", name, entry.dn, ace);

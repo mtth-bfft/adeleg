@@ -10,7 +10,7 @@ use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
 use crate::schema::Schema;
 use crate::delegations::{get_explicit_aces, get_schema_aces, Delegation};
-use crate::utils::{get_domain_sid, get_forest_sid, get_adminsdholder_sd, pretty_print_ace};
+use crate::utils::{get_adminsdholder_sd, pretty_print_ace, get_domains};
 
 fn main() {
     let default_port = format!("{}", LDAP_PORT);
@@ -106,17 +106,50 @@ fn main() {
         }
     };
 
-    let forest_sid = match get_forest_sid(&conn) {
-        Ok(s) => s,
+    let domains = match get_domains(&conn) {
+        Ok(v) => v,
         Err(e) => {
-            eprintln!("Unable to fetch forest SID: {}", e);
+            eprintln!("Unable to list domains: {}", e);
             std::process::exit(1);
         }
     };
 
-    let domain_sids = conn.get_naming_contexts().iter()
-        .map(|nc| get_domain_sid(&conn, nc).unwrap_or(forest_sid.clone()))
-        .collect::<HashSet<Sid>>();
+    let root_domain = {
+        let root_nc = conn.get_root_domain_naming_context();
+        let mut res = None;
+        for domain in &domains {
+            if domain.distinguished_name == root_nc {
+                res = Some(domain);
+                break;
+            }
+        }
+        if let Some(d) = res { 
+            d
+        } else {
+            eprintln!("Unable to find root domain naming context on this domain controller");
+            std::process::exit(1);
+        }
+    };
+
+    // Derive a list of trustees to ignore
+    let mut ignored_trustee_sids: HashSet<Sid> = HashSet::from([
+        Sid::try_from("S-1-5-10").expect("invalid SID"),     // SELF
+        Sid::try_from("S-1-3-0").expect("invalid SID"),      // Creator Owner
+        Sid::try_from("S-1-5-18").expect("invalid SID"),     // Local System
+        Sid::try_from("S-1-5-20").expect("invalid SID"),     // Network Service
+        Sid::try_from("S-1-5-32-544").expect("invalid SID"), // Administrators
+        Sid::try_from("S-1-5-9").expect("invalid SID"),      // Enterprise Domain Controllers
+        Sid::try_from("S-1-5-32-548").expect("invalid SID"), // Account Operators
+        Sid::try_from("S-1-5-32-549").expect("invalid SID"), // Server Operators
+        Sid::try_from("S-1-5-32-550").expect("invalid SID"), // Print Operators
+        Sid::try_from("S-1-5-32-551").expect("invalid SID"), // Backup Operators
+    ]);
+    for domain in &domains {
+        ignored_trustee_sids.insert(domain.sid.with_rid(512));   // Domain Admins
+        ignored_trustee_sids.insert(domain.sid.with_rid(516));   // Domain Controllers
+        ignored_trustee_sids.insert(domain.sid.with_rid(518));   // Schema Admins
+        ignored_trustee_sids.insert(domain.sid.with_rid(519));   // Enterprise Admins
+    }
 
     let adminsdholder_sd = match get_adminsdholder_sd(&conn) {
         Ok(s) => s,
@@ -126,7 +159,8 @@ fn main() {
         }
     };
 
-    let schema = match Schema::query(&conn) {
+    let domain_sids: Vec<Sid> = domains.iter().map(|d| d.sid.clone()).collect();
+    let schema = match Schema::query(&conn, &domain_sids[..], &root_domain.sid) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Unable to fetch required information from schema: {}", e);
@@ -161,63 +195,46 @@ fn main() {
         res
     };
 
-    let delegations: Vec<Delegation> = {
-        let mut res = vec![];
-        if let Some(input_files) = args.values_of("delegations") {
-            for input_filepath in input_files.into_iter() {
-                let json = match std::fs::read_to_string(input_filepath) {
-                    Ok(f) => f,
+    // Derive expected ACEs from these delegations, and index these ACEs by Sid then Location
+    let mut delegations_in_input: HashMap<Sid, HashMap<DelegationLocation, Vec<(Delegation, Vec<Ace>)>>> = HashMap::new();
+    if let Some(input_files) = args.values_of("delegations") {
+        for input_filepath in input_files.into_iter() {
+            let json = match std::fs::read_to_string(input_filepath) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!(" [!] Unable to open file {} : {}", input_filepath, e);
+                    std::process::exit(1);
+                }
+            };
+            let delegations = match Delegation::from_json(&json, &templates) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!(" [!] Unable to parse delegation file {} : {}", input_filepath, e);
+                    std::process::exit(1);
+                }
+            };
+            for delegation in &delegations {
+                let expected_aces = match delegation.derive_aces(&conn, &root_domain, &domains) {
+                    Ok(h) => h,
                     Err(e) => {
-                        eprintln!(" [!] Unable to open file {} : {}", input_filepath, e);
+                        eprintln!(" [!] Unable to compute expected ACEs from file \"{}\" : {}", input_filepath, e);
                         std::process::exit(1);
                     }
                 };
-                match Delegation::from_json(&json, &templates) {
-                    Ok(mut v) => res.append(&mut v),
-                    Err(e) => {
-                        eprintln!(" [!] Unable to parse delegation file {} : {}", input_filepath, e);
-                        std::process::exit(1);
-                    }
+                for (location, aces) in expected_aces {
+                    let sid = aces.get(0).expect("delegations should have at least one ACE").trustee.clone();
+                    delegations_in_input.entry(sid).or_insert(HashMap::new())
+                        .entry(location).or_insert(vec![])
+                        .push((delegation.clone(), aces));
                 }
             }
         }
-        res
-    };
-    // Derive expected ACEs from these delegations, and index these ACEs by Sid then Location
-    let mut delegations_in_input: HashMap<Sid, HashMap<DelegationLocation, Vec<(Delegation, Vec<Ace>)>>> = HashMap::new();
-    for delegation in &delegations {
-        for (location, aces) in delegation.derive_aces(&forest_sid, &domain_sids) {
-            let sid = aces.get(0).expect("delegations should have at least one ACE").trustee.clone();
-            delegations_in_input.entry(sid).or_insert(HashMap::new())
-                .entry(location).or_insert(vec![])
-                .push((delegation.clone(), aces));
-        }
     }
 
-    // Derive a list of trustees to ignore
-    let mut ignored_trustee_sids: HashSet<Sid> = HashSet::from([
-        Sid::try_from("S-1-5-10").expect("invalid SID"),     // SELF
-        Sid::try_from("S-1-3-0").expect("invalid SID"),      // Creator Owner
-        Sid::try_from("S-1-5-18").expect("invalid SID"),     // Local System
-        Sid::try_from("S-1-5-20").expect("invalid SID"),     // Network Service
-        Sid::try_from("S-1-5-32-544").expect("invalid SID"), // Administrators
-        Sid::try_from("S-1-5-9").expect("invalid SID"),      // Enterprise Domain Controllers
-        Sid::try_from("S-1-5-32-548").expect("invalid SID"), // Account Operators
-        Sid::try_from("S-1-5-32-549").expect("invalid SID"), // Server Operators
-        Sid::try_from("S-1-5-32-550").expect("invalid SID"), // Print Operators
-        Sid::try_from("S-1-5-32-551").expect("invalid SID"), // Backup Operators
-    ]);
-    for domain_sid in domain_sids {
-        ignored_trustee_sids.insert(domain_sid.with_rid(512));   // Domain Admins
-        ignored_trustee_sids.insert(domain_sid.with_rid(516));   // Domain Controllers
-        ignored_trustee_sids.insert(domain_sid.with_rid(518));   // Schema Admins
-        ignored_trustee_sids.insert(domain_sid.with_rid(519));   // Enterprise Admins
-    }
-
-    let mut aces_found: HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>> = get_schema_aces(&schema, &forest_sid, &ignored_trustee_sids);
+    let mut aces_found: HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>> = get_schema_aces(&schema, &root_domain.sid, &ignored_trustee_sids);
     for naming_context in conn.get_naming_contexts() {
         println!("Fetching security descriptors of naming context {}", naming_context);
-        match get_explicit_aces(&conn, naming_context, &forest_sid, &schema, &adminsdholder_sd, &ignored_trustee_sids) {
+        match get_explicit_aces(&conn, naming_context, &root_domain.sid, &schema, &adminsdholder_sd, &ignored_trustee_sids) {
             Ok( sids) => {
                 for (sid, locations) in sids.into_iter() {
                     for (location, mut aces) in locations.into_iter() {

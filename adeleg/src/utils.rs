@@ -3,16 +3,24 @@ use authz::{Ace, AceType};
 use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_DELETE, ADS_RIGHT_READ_CONTROL, ADS_RIGHT_WRITE_DAC, ADS_RIGHT_WRITE_OWNER, ADS_RIGHT_SYNCHRONIZE, ADS_RIGHT_ACCESS_SYSTEM_SECURITY, ADS_RIGHT_GENERIC_READ, ADS_RIGHT_GENERIC_WRITE, ADS_RIGHT_GENERIC_EXECUTE, ADS_RIGHT_GENERIC_ALL, ADS_RIGHT_DS_CREATE_CHILD};
 use windows::Win32::Security::DACL_SECURITY_INFORMATION;
 use winldap::control::{BerVal, BerEncodable};
-use windows::Win32::Networking::Ldap::LDAP_SERVER_SD_FLAGS_OID;
+use windows::Win32::Networking::Ldap::{LDAP_SERVER_SD_FLAGS_OID, LDAP_SCOPE_SUBTREE};
 use winldap::control::LdapControl;
 use core::borrow::Borrow;
 use authz::{Sid, SecurityDescriptor, Guid};
 use winldap::connection::LdapConnection;
 use winldap::search::{LdapSearch, LdapEntry};
 use winldap::error::LdapError;
+use winldap::utils::get_attr_str;
 use windows::Win32::Networking::Ldap::LDAP_SCOPE_BASE;
 
 use crate::schema::Schema;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Domain {
+    pub sid: Sid,
+    pub distinguished_name: String,
+    pub netbios_name: String,
+}
 
 pub(crate) fn get_attr_sid<T: Borrow<LdapEntry>>(search_results: &[T], base: &str, attr_name: &str) -> Result<Sid, LdapError> {
     let attrs = if search_results.len() > 1 {
@@ -88,13 +96,6 @@ pub(crate) fn get_attr_guid<T: Borrow<LdapEntry>>(search_results: &[T], base: &s
     }
 }
 
-pub(crate) fn get_forest_sid(conn: &LdapConnection) -> Result<Sid, LdapError> {
-    let search = LdapSearch::new(&conn, Some(conn.get_root_domain_naming_context()), LDAP_SCOPE_BASE, None, Some(&["objectSid"]), &[]);
-    let root_domain = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
-    let sid = get_attr_sid(&root_domain, conn.get_root_domain_naming_context(), "objectsid").expect("unable to parse forest SID");
-    Ok(sid)
-}
-
 pub(crate) fn get_domain_sid(conn: &LdapConnection, naming_context: &str) -> Option<Sid> {
     let search = LdapSearch::new(&conn, Some(naming_context), LDAP_SCOPE_BASE, None, Some(&["objectSid"]), &[]);
     let domain = match search.collect::<Result<Vec<LdapEntry>, LdapError>>() {
@@ -106,6 +107,27 @@ pub(crate) fn get_domain_sid(conn: &LdapConnection, naming_context: &str) -> Opt
         _ => return None,
     };
     Some(sid)
+}
+
+pub(crate) fn get_domains(conn: &LdapConnection) -> Result<Vec<Domain>, LdapError> {
+    let mut v = vec![];
+    for nc in conn.get_naming_contexts() {
+        let sid = match get_domain_sid(&conn, nc) {
+            Some(sid) => sid,
+            None => continue,
+        };
+
+        let search = LdapSearch::new(&conn, Some(nc), LDAP_SCOPE_BASE, None, Some(&["name"]), &[]);
+        let res = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
+        let netbios_name = get_attr_str(&res, nc, "name").expect("unable to parse domain NetBIOS name");
+
+        v.push(Domain {
+            distinguished_name: nc.to_owned(),
+            sid,
+            netbios_name,
+        });
+    }
+    Ok(v)
 }
 
 pub(crate) fn get_adminsdholder_sd(conn: &LdapConnection) -> Result<SecurityDescriptor, LdapError> {
@@ -273,4 +295,10 @@ pub(crate) fn strip_naming_context<'a>(dn: &'a str, naming_context: &str) -> &'a
 
 pub(crate) fn ends_with_case_insensitive(haystack: &str, needle: &str) -> bool {
     haystack.to_lowercase().ends_with(&needle.to_lowercase())
+}
+
+pub(crate) fn resolve_samaccountname_to_sid(ldap: &LdapConnection, samaccountname: &str, domain: &Domain) -> Result<Sid, LdapError> {
+    let search = LdapSearch::new(&ldap, Some(&domain.distinguished_name), LDAP_SCOPE_SUBTREE, Some(&format!("(samAccountName={})", samaccountname)), Some(&["objectSid"]), &[]);
+    let res = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
+    get_attr_sid(&res, &domain.distinguished_name, "objectsid")
 }
