@@ -3,7 +3,7 @@ use winldap::utils::get_attr_str;
 use std::collections::{HashSet, HashMap};
 use authz::{SecurityDescriptor, Sid};
 use serde::{Serialize, Deserialize};
-use crate::{utils::{Domain, get_attr_sd, get_domain_sid, replace_suffix_case_insensitive, ends_with_case_insensitive, resolve_samaccountname_to_sid}, schema::Schema};
+use crate::{utils::{Domain, get_attr_sd, get_domain_sid, replace_suffix_case_insensitive, ends_with_case_insensitive, resolve_samaccountname_to_sid, get_attr_sid}, schema::Schema};
 use winldap::connection::LdapConnection;
 use winldap::utils::get_attr_strs;
 use winldap::error::LdapError;
@@ -405,14 +405,20 @@ pub(crate) fn get_explicit_aces(conn: &LdapConnection, naming_context: &str, for
                              Some(&[
         "nTSecurityDescriptor",
         "objectClass",
+        "objectSID",
         "adminCount",
     ]), &[&sd_control]);
 
     let mut res = HashMap::new();
+    // Keep track of objectSID -> DN while scanning objects, for those who have an objectSID
+    let mut object_sids = HashMap::new();
     for entry in search {
         let entry = entry?;
         let admincount = get_attr_str(&[&entry], &entry.dn, "admincount").unwrap_or("0".to_owned()) != "0";
         let sd = get_attr_sd(&[&entry], &entry.dn, "ntsecuritydescriptor")?;
+        if let Ok(object_sid) = get_attr_sid(&[&entry], &entry.dn, "objectsid") {
+            object_sids.insert(object_sid, entry.dn.to_owned());
+        };
         let dacl = sd.dacl.expect("assertion failed: object without a DACL");
 
         // Check if the DACL is in canonical order
@@ -441,6 +447,21 @@ pub(crate) fn get_explicit_aces(conn: &LdapConnection, naming_context: &str, for
                 .push(ace.to_owned());
         }
     }
+
+    // Remove any ACE whose trustee is a parent object (parents control their child containers,
+    // e.g. computers control their BitLocker recovery information, TPM information, Hyper-V virtual machine objects, etc.)
+    for (trustee, delegations) in res.iter_mut() {
+        if let Some(trustee_dn) = object_sids.get(trustee) {
+            for (location, aces) in delegations.iter_mut() {
+                if let DelegationLocation::Dn(dn) = location {
+                    if ends_with_case_insensitive(dn, trustee_dn) {
+                        aces.clear();
+                    }
+                }
+            }
+        }
+    }
+
     Ok(res)
 }
 
