@@ -3,7 +3,7 @@ use authz::{Ace, AceType};
 use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_DELETE, ADS_RIGHT_READ_CONTROL, ADS_RIGHT_WRITE_DAC, ADS_RIGHT_WRITE_OWNER, ADS_RIGHT_SYNCHRONIZE, ADS_RIGHT_ACCESS_SYSTEM_SECURITY, ADS_RIGHT_GENERIC_READ, ADS_RIGHT_GENERIC_WRITE, ADS_RIGHT_GENERIC_EXECUTE, ADS_RIGHT_GENERIC_ALL, ADS_RIGHT_DS_CREATE_CHILD};
 use windows::Win32::Security::DACL_SECURITY_INFORMATION;
 use winldap::control::{BerVal, BerEncodable};
-use windows::Win32::Networking::Ldap::{LDAP_SERVER_SD_FLAGS_OID, LDAP_SCOPE_SUBTREE};
+use windows::Win32::Networking::Ldap::{LDAP_SERVER_SD_FLAGS_OID, LDAP_SCOPE_SUBTREE, LDAP_SCOPE_ONELEVEL};
 use winldap::control::LdapControl;
 use core::borrow::Borrow;
 use authz::{Sid, SecurityDescriptor, Guid};
@@ -110,16 +110,18 @@ pub(crate) fn get_domain_sid(conn: &LdapConnection, naming_context: &str) -> Opt
 }
 
 pub(crate) fn get_domains(conn: &LdapConnection) -> Result<Vec<Domain>, LdapError> {
+    let partitions_dn = format!("CN=Partitions,{}", conn.get_configuration_naming_context());
+    let search = LdapSearch::new(&conn, Some(&partitions_dn), LDAP_SCOPE_ONELEVEL, Some("(&(nCName=*)(nETBIOSName=*))"), Some(&["nCName", "nETBIOSName"]), &[]);
+    let partitions = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
+
     let mut v = vec![];
-    for nc in conn.get_naming_contexts() {
-        let sid = match get_domain_sid(&conn, nc) {
+    for partition in &partitions {
+        let nc = get_attr_str(&[partition], &partition.dn, "ncname")?;
+        let netbios_name = get_attr_str(&[partition], &partition.dn, "netbiosname")?;
+        let sid = match get_domain_sid(&conn, &nc) {
             Some(sid) => sid,
             None => continue,
         };
-
-        let search = LdapSearch::new(&conn, Some(nc), LDAP_SCOPE_BASE, None, Some(&["name"]), &[]);
-        let res = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
-        let netbios_name = get_attr_str(&res, nc, "name").expect("unable to parse domain NetBIOS name");
 
         v.push(Domain {
             distinguished_name: nc.to_owned(),
@@ -149,7 +151,7 @@ pub(crate) fn get_adminsdholder_sd(conn: &LdapConnection) -> Result<SecurityDesc
         }
     }
     Err(LdapError::RequiredObjectMissing {
-        dn: "CN=AdminSDHolder,CN=System,*".to_owned()
+        dn: "CN=AdminSDHolder,CN=System,DC=*".to_owned()
     })
 }
 

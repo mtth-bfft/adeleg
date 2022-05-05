@@ -32,12 +32,12 @@ pub(crate) fn get_ldap_errmsg(code: u32) -> String {
 }
 
 pub fn get_attr_strs<T: Borrow<LdapEntry>>(search_results: &[T], base: &str, attr_name: &str) -> Result<Vec<String>, LdapError> {
-    let attrs = if search_results.len() > 1 {
+    let (dn, attrs) = if search_results.len() > 1 {
         return Err(LdapError::RequiredObjectCollision { dn: base.to_owned() });
     } else if search_results.len() == 0 {
         return Err(LdapError::RequiredObjectMissing { dn: base.to_owned() });
     } else {
-        &search_results[0].borrow().attrs
+        (&search_results[0].borrow().dn, &search_results[0].borrow().attrs)
     };
 
     if let Some(vals) = attrs.get(attr_name) {
@@ -47,7 +47,7 @@ pub fn get_attr_strs<T: Borrow<LdapEntry>>(search_results: &[T], base: &str, att
         }
         Ok(strings)
     } else {
-        Err(LdapError::RequiredAttributeMissing { dn: base.to_owned(), name: attr_name.to_owned() })
+        Err(LdapError::RequiredAttributeMissing { dn: dn.to_owned(), name: attr_name.to_owned() })
     }
 }
 
