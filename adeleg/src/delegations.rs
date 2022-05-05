@@ -484,9 +484,8 @@ pub fn is_ace_part_of_a_delegation(ace: &Ace, default_aces: &[Ace], admincount: 
         return false; // ignore "delete protection" ACEs
     }
     if default_aces.contains(&ace) {
-        return false; // ignore ACEs from the schema (note: the defaultSecurityDescriptor from the forest
-        // schema is not inherited: it is simply memcpy()ed into the new object's security descriptor.
-        // So comparison here is simple, based on a fast hash lookup.
+        return false; // FIXME: ACEs from the schema are not simply memcpy()ed, they are "inherited" (so that e.g.
+        // the Creator Owner and Creator Group SIDs are replaced accordingly)
     }
     if admincount && adminsdholder_aces.contains(&ace) {
         return false; // ignore ACEs from SDProp on objects marked with adminCount=1 (note: ACEs from
