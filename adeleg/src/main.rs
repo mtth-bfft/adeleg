@@ -258,32 +258,34 @@ fn main() {
 
     for (trustee, locations) in &aces_found {
         for (location, aces) in locations {
-            // Check which ACEs are explained by a delegation passed to us as input
-            let mut aces_explained: Vec<bool> = aces.iter().map(|_| false).collect();
+            // Check if the expected delegations are in place, while keeping track of which ACEs are explained
+            // by >= 1 delegation (so that, at the end, we can say which ACEs are not covered by a known delegation)
+            let mut aces_explained: Vec<(&Ace, bool)> = aces.iter().map(|ace| (ace, false)).collect();
+
             let expected_delegations = delegations_in_input.get(trustee)
                 .and_then(|h| h.get(&location).map(|v| v.as_slice()))
                 .unwrap_or(&[]);
             for (_, expected_aces) in expected_delegations {
-                if is_ace_subset_and_in_order(&aces, &expected_aces) {
-                    for ace in expected_aces {
-                        aces_explained[aces.iter().position(|a| a == ace).unwrap()] = true;
+                if let Some(positions) = find_ace_positions(&expected_aces, &aces[..]) {
+                    for pos in positions {
+                        aces_explained[pos].1 = true;
                     }
                 }
             }
 
-            if aces_explained.iter().any(|b| !*b) {
+            if aces_explained.iter().any(|(_, explained)| !*explained) {
                 println!("====== Considering {} on {:?}", &trustee, &location);
 
                 eprintln!(" [.] Expected ACEs:");
                 for (delegation, aces) in expected_delegations {
                     for ace in aces {
-                        eprintln!("          {:?} (from {})", pretty_print_ace(ace, &schema), delegation.template_name);
+                        eprintln!("          {:?} (from template \"{}\")", pretty_print_ace(ace, &schema), delegation.template_name);
                     }
                 }
 
                 eprintln!(" [.] ACEs found:");
-                for (i, ace) in aces.iter().enumerate() {
-                    eprintln!("          {} {}", if aces_explained[i] { "[OK]" } else { "[!!]" }, pretty_print_ace(ace, &schema));
+                for (ace, explained) in aces_explained {
+                    eprintln!("          {} {}", if explained { "[OK]" } else { "[!!]" }, pretty_print_ace(ace, &schema));
                 }
 
                 eprintln!("");
@@ -292,23 +294,35 @@ fn main() {
     }
 }
 
-fn is_ace_subset_and_in_order(needle: &[Ace], haystack: &[Ace]) -> bool {
-    let mut iter = haystack.iter();
+fn ace_equivalent(a: &Ace, b: &Ace) -> bool {
+    if a == b {
+        return true;
+    }
+
+    let mut a = a.clone();
+    let mut b = b.clone();
+
+    a.access_mask = a.access_mask & !(delegations::IGNORED_ACCESS_RIGHTS);
+    b.access_mask = b.access_mask & !(delegations::IGNORED_ACCESS_RIGHTS);
+
+    a == b
+}
+
+fn find_ace_positions(needle: &[Ace], haystack: &[Ace]) -> Option<Vec<usize>> {
+    let mut res = vec![];
+    let mut iter = haystack.iter().enumerate();
     for needle_ace in needle {
         let mut found = false;
-        loop {
-            if let Some(haystack_ace) = iter.next() {
-                if haystack_ace == needle_ace {
-                    found = true;
-                    break;
-                }
-            } else {
+        while let Some((haystack_pos, haystack_ace)) = iter.next() {
+            if ace_equivalent(haystack_ace, needle_ace) {
+                res.push(haystack_pos);
+                found = true;
                 break;
             }
         }
         if !found {
-            return false;
+            return None;
         }
     }
-    true
+    Some(res)
 }

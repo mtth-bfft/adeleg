@@ -3,7 +3,7 @@ use winldap::utils::get_attr_str;
 use std::collections::{HashSet, HashMap};
 use authz::{SecurityDescriptor, Sid};
 use serde::{Serialize, Deserialize};
-use crate::{utils::{Domain, get_attr_sd, get_domain_sid, strip_naming_context, ends_with_case_insensitive, resolve_samaccountname_to_sid}, schema::Schema};
+use crate::{utils::{Domain, get_attr_sd, get_domain_sid, replace_suffix_case_insensitive, ends_with_case_insensitive, resolve_samaccountname_to_sid}, schema::Schema};
 use winldap::connection::LdapConnection;
 use winldap::utils::get_attr_strs;
 use winldap::error::LdapError;
@@ -14,6 +14,11 @@ use windows::Win32::Security::DACL_SECURITY_INFORMATION;
 use windows::Win32::Security::NO_PROPAGATE_INHERIT_ACE;
 use windows::Win32::Security::ACE_INHERITED_OBJECT_TYPE_PRESENT;
 use windows::Win32::Networking::ActiveDirectory::ADS_RIGHT_DS_CONTROL_ACCESS;
+
+pub const IGNORED_ACCESS_RIGHTS: u32 = (ADS_RIGHT_READ_CONTROL.0 |
+    ADS_RIGHT_ACTRL_DS_LIST.0 |
+    ADS_RIGHT_DS_LIST_OBJECT.0 |
+    ADS_RIGHT_DS_READ_PROP.0) as u32;
 
 fn is_default<T: Default + PartialEq>(t: &T) -> bool {
     t == &T::default()
@@ -32,7 +37,6 @@ pub enum DelegationTrustee {
     RootDomainRid(u32),
     SamAccountName(String),
     //TODO: UPN(String),
-    //TODO: DN(String),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Eq)]
@@ -184,15 +188,17 @@ impl Delegation {
                     self.resource.clone()
                 };
                 let locations = if let DelegationLocation::Dn(dn_or_rdn) = location {
-                    if ends_with_case_insensitive(&dn_or_rdn, "cn=configuration") {
-                        vec![DelegationLocation::Dn(format!("{},{}", dn_or_rdn, conn.get_configuration_naming_context()))]
-                    } else if ends_with_case_insensitive(&dn_or_rdn, "cn=schema") {
-                        vec![DelegationLocation::Dn(format!("{},{}", dn_or_rdn, conn.get_schema_naming_context()))]
-                    } else if ends_with_case_insensitive(&dn_or_rdn, "dc=domaindnszones") ||
-                            ends_with_case_insensitive(&dn_or_rdn, "dc=forestdnszones") {
-                        vec![DelegationLocation::Dn(format!("{},{}", dn_or_rdn, conn.get_root_domain_naming_context()))]
+                    if ends_with_case_insensitive(&dn_or_rdn, "cn=configuration,dc=*") {
+                        vec![DelegationLocation::Dn(replace_suffix_case_insensitive(&dn_or_rdn, "cn=configuration,dc=*", conn.get_configuration_naming_context()))]
+                    } else if ends_with_case_insensitive(&dn_or_rdn, "cn=schema,dc=*") {
+                        vec![DelegationLocation::Dn(replace_suffix_case_insensitive(&dn_or_rdn, "cn=schema,dc=*", conn.get_schema_naming_context()))]
+                    } else if ends_with_case_insensitive(&dn_or_rdn, "dc=domaindnszones,dc=*") ||
+                            ends_with_case_insensitive(&dn_or_rdn, "dc=forestdnszones,dc=*") {
+                        vec![DelegationLocation::Dn(replace_suffix_case_insensitive(&dn_or_rdn, "dc=*", conn.get_root_domain_naming_context()))]
+                    } else if ends_with_case_insensitive(&dn_or_rdn, "dc=*") {
+                        domains.iter().map(|d| DelegationLocation::Dn(replace_suffix_case_insensitive(&dn_or_rdn, "dc=*", &d.distinguished_name))).collect()
                     } else {
-                        domains.iter().map(|d| DelegationLocation::Dn(format!("{},{}", dn_or_rdn, d.distinguished_name))).collect()
+                        vec![DelegationLocation::Dn(dn_or_rdn)]
                     }
                 } else {
                     vec![location]
@@ -467,16 +473,13 @@ pub fn is_ace_part_of_a_delegation(ace: &Ace, default_aces: &[Ace], admincount: 
     }
 
     // Ignore read-only ACEs which cannot be abused (e.g. to read LAPS passwords).
-    let problematic_rights = ace.access_mask as i32 & !(ADS_RIGHT_READ_CONTROL.0 |
-        ADS_RIGHT_ACTRL_DS_LIST.0 |
-        ADS_RIGHT_DS_LIST_OBJECT.0 |
-        ADS_RIGHT_DS_READ_PROP.0);
+    let problematic_rights = ace.access_mask & !(IGNORED_ACCESS_RIGHTS);
     if problematic_rights == 0 {
         return false;
     }
 
     // Some control accesses do not grant any right on the resource itself, they are not a delegation
-    if problematic_rights == ADS_RIGHT_DS_CONTROL_ACCESS.0 {
+    if problematic_rights == ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32 {
         if let Some(guid) = ace.get_object_type() {
             if let Some(name) = schema.control_access_names.get(guid) {
                 if ignored_control_accesses.contains(&name.to_lowercase().as_str()) {
