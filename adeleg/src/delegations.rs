@@ -374,6 +374,11 @@ pub(crate) fn get_schema_aces(schema: &Schema, forest_sid: &Sid, ignored_trustee
                     continue;
                 }
 
+                // gMSA are hardcoded to not have their password reset, it is not a delegation.
+                if class_name == "msDS-GroupManagedServiceAccount" && ace.grants_access() == false && ace.access_mask == ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32 {
+                    continue;
+                }
+
                 res.entry(ace.trustee.clone()).or_insert(HashMap::new())
                     .entry(DelegationLocation::DefaultSecurityDescriptor(class_name.to_owned()))
                     .or_insert(vec![])
