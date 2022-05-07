@@ -100,7 +100,6 @@ impl<'a> Iterator for LdapSearch<'a> {
 
                 // Prepare server control array of pointers (at the last moment because of paging, which changes every time)
                 let mut server_controls: Vec<ldapcontrolW> = Vec::new();
-                let mut server_controls_ptrs: Vec<*const ldapcontrolW> = Vec::new();
                 for control in &self.server_controls {
                     server_controls.push(ldapcontrolW {
                         ldctl_oid: PWSTR(control.oid.as_ptr() as *mut _),
@@ -123,8 +122,11 @@ impl<'a> Iterator for LdapSearch<'a> {
                         code: res,
                     }));
                 }
-                server_controls_ptrs.push(page_control);
-                server_controls_ptrs.push(null() as *const ldapcontrolW);
+                let server_controls_ptrs: Vec<*const ldapcontrolW> = server_controls.iter()
+                    .map(|c| c as *const ldapcontrolW)
+                    .chain(std::iter::once(page_control as *const ldapcontrolW))
+                    .chain(std::iter::once(null()))
+                    .collect();
                 let server_controls: *const *const ldapcontrolW = server_controls_ptrs.as_ptr();
 
                 let res = unsafe {
