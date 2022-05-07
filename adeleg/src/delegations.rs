@@ -1,16 +1,16 @@
 use authz::{Ace, AceType, Guid};
 use winldap::utils::get_attr_str;
 use std::collections::{HashSet, HashMap};
-use authz::{SecurityDescriptor, Sid};
+use authz::Sid;
 use serde::{Serialize, Deserialize};
 use crate::{utils::{Domain, get_attr_sd, get_domain_sid, replace_suffix_case_insensitive, ends_with_case_insensitive, resolve_samaccountname_to_sid, get_attr_sid}, schema::Schema};
 use winldap::connection::LdapConnection;
 use winldap::utils::get_attr_strs;
 use winldap::error::LdapError;
 use winldap::search::LdapSearch;
-use windows::Win32::{Networking::{Ldap::{LDAP_SCOPE_SUBTREE, LDAP_SERVER_SD_FLAGS_OID}, ActiveDirectory::{ADS_RIGHT_READ_CONTROL, ADS_RIGHT_ACTRL_DS_LIST, ADS_RIGHT_DS_LIST_OBJECT, ADS_RIGHT_DS_READ_PROP, ADS_RIGHT_DELETE, ADS_RIGHT_DS_DELETE_TREE}}, Security::{CONTAINER_INHERIT_ACE, INHERIT_ONLY_ACE, OBJECT_INHERIT_ACE, ACE_OBJECT_TYPE_PRESENT}};
+use windows::Win32::{Networking::{Ldap::{LDAP_SCOPE_SUBTREE, LDAP_SERVER_SD_FLAGS_OID}, ActiveDirectory::{ADS_RIGHT_READ_CONTROL, ADS_RIGHT_ACTRL_DS_LIST, ADS_RIGHT_DS_LIST_OBJECT, ADS_RIGHT_DS_READ_PROP, ADS_RIGHT_DELETE, ADS_RIGHT_DS_DELETE_TREE, ADS_RIGHT_DS_DELETE_CHILD}}, Security::{CONTAINER_INHERIT_ACE, INHERIT_ONLY_ACE, OBJECT_INHERIT_ACE, ACE_OBJECT_TYPE_PRESENT}};
 use winldap::control::{LdapControl, BerVal, BerEncodable};
-use windows::Win32::Security::DACL_SECURITY_INFORMATION;
+use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION};
 use windows::Win32::Security::NO_PROPAGATE_INHERIT_ACE;
 use windows::Win32::Security::ACE_INHERITED_OBJECT_TYPE_PRESENT;
 use windows::Win32::Networking::ActiveDirectory::ADS_RIGHT_DS_CONTROL_ACCESS;
@@ -291,10 +291,8 @@ impl Delegation {
 }
 
 fn resolve_object_type(name: &str, schema: &Schema) -> Option<Guid> {
-    for (guid, class_name) in &schema.class_guids {
-        if class_name == name {
-            return Some(guid.clone());
-        }
+    if let Some(guid) = schema.class_guids.get(name) {
+        return Some(guid.clone());
     }
     for (guid, attr_name) in &schema.attribute_guids {
         if attr_name == name {
@@ -323,7 +321,7 @@ fn resolve_object_type(name: &str, schema: &Schema) -> Option<Guid> {
 }
 
 fn resolve_inherited_object_type(name: &str, schema: &Schema) -> Option<Guid> {
-    for (class_guid, class_name) in &schema.class_guids {
+    for (class_name, class_guid) in &schema.class_guids {
         if class_name == name {
             return Some(class_guid.clone());
         }
@@ -339,18 +337,20 @@ impl DelegationTemplate {
         let mut res: Vec<DelegationTemplate> = serde_json::from_str(json).map_err(|e| format!("unable to parse template: {}", e))?;
         for template in &mut res {
             for ace in &mut template.rights {
+                // Do not fail if one of these class/attribute GUIDs fails to resolve: it simply means
+                // the schema has not been updated to support them. Just ignore these ACEs.
                 if let Some(object_type) = &ace.object_type_name {
                     if let Some(guid) = resolve_object_type(object_type, schema) {
                         ace.object_type = Some(guid);
                     } else {
-                        return Err(format!("unknown object type \"{}\"", object_type));
+                        continue;
                     }
                 }
                 if let Some(inherited_object_type) = &ace.inherited_object_type_name {
                     if let Some(guid) = resolve_inherited_object_type(inherited_object_type, schema) {
                         ace.inherited_object_type = Some(guid);
                     } else {
-                        return Err(format!("unknown inherited object type \"{}\"", inherited_object_type));
+                        continue;
                     }
                 }
             }
@@ -365,8 +365,7 @@ pub(crate) fn get_schema_aces(schema: &Schema, forest_sid: &Sid, ignored_trustee
     for (class_name, default_sd) in default_sds {
         if let Some(default_acl) = &default_sd.dacl {
             for ace in &default_acl.aces {
-                if !is_ace_part_of_a_delegation(ace,
-                        &[],
+                if !is_ace_interesting(ace,
                         false,
                         &[],
                         &schema,
@@ -375,7 +374,7 @@ pub(crate) fn get_schema_aces(schema: &Schema, forest_sid: &Sid, ignored_trustee
                 }
 
                 // gMSA are hardcoded to not have their password reset, it is not a delegation.
-                if class_name == "msDS-GroupManagedServiceAccount" && ace.grants_access() == false && ace.access_mask == ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32 {
+                if class_name == "msDS-GroupManagedServiceAccount" && !ace.grants_access() && ace.access_mask == ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32 {
                     continue;
                 }
 
@@ -389,13 +388,12 @@ pub(crate) fn get_schema_aces(schema: &Schema, forest_sid: &Sid, ignored_trustee
     res
 }
 
-pub(crate) fn get_explicit_aces(conn: &LdapConnection, naming_context: &str, forest_sid: &Sid, schema: &Schema, adminsdholder_sd: &SecurityDescriptor, ignored_trustee_sids: &HashSet<Sid>) -> Result<HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>>, LdapError> {
+pub(crate) fn get_explicit_aces(conn: &LdapConnection, naming_context: &str, forest_sid: &Sid, schema: &Schema, adminsdholder_aces: &[Ace], ignored_trustee_sids: &HashSet<Sid>) -> Result<HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>>, LdapError> {
     let domain_sid = get_domain_sid(conn, naming_context);
     let default_sd = schema.class_default_sd.get(domain_sid.as_ref().unwrap_or(forest_sid)).expect("domain SID without defaultSecurityDescriptors");
-    let adminsdholder_aces: &[Ace] = adminsdholder_sd.dacl.as_ref().map(|d| &d.aces[..]).unwrap_or(&[]);
 
     let mut sd_control_val = BerVal::new();
-    sd_control_val.append(BerEncodable::Sequence(vec![BerEncodable::Integer((DACL_SECURITY_INFORMATION.0).into())]));
+    sd_control_val.append(BerEncodable::Sequence(vec![BerEncodable::Integer((OWNER_SECURITY_INFORMATION.0 | DACL_SECURITY_INFORMATION.0).into())]));
     let sd_control = LdapControl::new(
         LDAP_SERVER_SD_FLAGS_OID,
         &sd_control_val,
@@ -414,8 +412,14 @@ pub(crate) fn get_explicit_aces(conn: &LdapConnection, naming_context: &str, for
     let mut object_sids = HashMap::new();
     for entry in search {
         let entry = entry?;
+        let sd = match get_attr_sd(&[&entry], &entry.dn, "ntsecuritydescriptor") {
+            Ok(sd) => sd,
+            Err(e) => {
+                eprintln!(" [!] Unable to read security descriptor, {} (results will be incomplete)", e);
+                continue;
+            },
+        };
         let admincount = get_attr_str(&[&entry], &entry.dn, "admincount").unwrap_or("0".to_owned()) != "0";
-        let sd = get_attr_sd(&[&entry], &entry.dn, "ntsecuritydescriptor")?;
         if let Ok(object_sid) = get_attr_sid(&[&entry], &entry.dn, "objectsid") {
             object_sids.insert(object_sid, entry.dn.to_owned());
         };
@@ -432,14 +436,24 @@ pub(crate) fn get_explicit_aces(conn: &LdapConnection, naming_context: &str, for
             .and_then(|sd| sd.dacl.as_ref().map(|acl| &acl.aces[..]))
             .unwrap_or(&[]);
 
+        // Derive ACEs from the defaultSecurityDescriptor of the object's class, and see if the ACE is a default.
+        // These ACEs are not simply memcpy()ed, they are treated as if the object had inherited them from the schema.
+        let owner = sd.owner.as_ref().expect("Object security descriptor without an owner");
+        let object_classes = get_attr_strs(&[&entry], &entry.dn, "objectclass")?;
+        let most_precise_class = object_classes.last().expect("Object without any objectClass");
+        let most_precise_class = schema.class_guids.get(most_precise_class).expect("Object with an unknown objectClass");
+        let default_aces = get_ace_derived_by_inheritance(default_aces, &owner, &most_precise_class, true);
+
         let here = DelegationLocation::Dn(entry.dn.to_owned());
         for ace in &dacl.aces {
-            if !is_ace_part_of_a_delegation(ace,
-                    &default_aces,
+            if !is_ace_interesting(ace,
                     admincount,
                     &adminsdholder_aces[..],
                     &schema,
                     &ignored_trustee_sids) {
+                continue;
+            }
+            if default_aces.contains(&ace) {
                 continue;
             }
             res.entry(ace.trustee.clone()).or_insert(HashMap::new())
@@ -465,44 +479,38 @@ pub(crate) fn get_explicit_aces(conn: &LdapConnection, naming_context: &str, for
     Ok(res)
 }
 
-pub fn is_ace_part_of_a_delegation(ace: &Ace, default_aces: &[Ace], admincount: bool, adminsdholder_aces: &[Ace], schema: &Schema, ignored_trustee_sids: &HashSet<Sid>) -> bool {
+pub fn is_ace_interesting(ace: &Ace, admincount: bool, adminsdholder_aces: &[Ace], schema: &Schema, ignored_trustee_sids: &HashSet<Sid>) -> bool {
     let ignored_control_accesses = [
         "apply group policy", // applying a group policy does not mean we control it
         "send to", // sending email to people does not mean we control them
-        "change password", // changing password requires knowing the current password
+        "change password", // changing password requires knowing the current password, and if you know the password you control the user
         "query self quota", // if an attacker can impersonate a user, querying their quota is the least of their worries
         "open address list", // listing address books is not a control path
         "allow a dc to create a clone of itself", // if an attacker can impersonate a DC, cloning to a new DC is the least of your worries
+        "enumerate entire sam domain", // user enumeration is allowed to everyone by default
     ];
     let everyone = Sid::try_from("S-1-1-0").expect("invalid SID");
 
     if ace.is_inherited() {
         return false; // ignore inherited ACEs
     }
-    if ace.trustee == everyone && !ace.grants_access() &&
-            (ace.access_mask | ADS_RIGHT_DELETE.0 as u32 | ADS_RIGHT_DS_DELETE_TREE.0 as u32) == ace.access_mask {
-        return false; // ignore "delete protection" ACEs
+    let problematic_rights = ace.access_mask & !(IGNORED_ACCESS_RIGHTS);
+    if problematic_rights == 0 {
+        return false; // ignore read-only ACEs which cannot be abused (e.g. to read LAPS passwords)
     }
-    if default_aces.contains(&ace) {
-        return false; // FIXME: ACEs from the schema are not simply memcpy()ed, they are "inherited" (so that e.g.
-        // the Creator Owner and Creator Group SIDs are replaced accordingly)
+    if ace.trustee == everyone && !ace.grants_access() &&
+            (ace.access_mask & !(ADS_RIGHT_DELETE.0 as u32 | ADS_RIGHT_DS_DELETE_CHILD.0 as u32 | ADS_RIGHT_DS_DELETE_TREE.0 as u32)) == 0 {
+        return false; // ignore "delete protection" ACEs
     }
     if admincount && adminsdholder_aces.contains(&ace) {
         return false; // ignore ACEs from SDProp on objects marked with adminCount=1 (note: ACEs from
-        // AdminSDHolder are not inherited, just copied, so comparison here is also a simple fast hash
+        // AdminSDHolder are not inherited, just copied, so comparison here is a simple fast hash
         // lookup.)
     }
     if ignored_trustee_sids.contains(&ace.trustee) {
         return false; // these principals are already in control of the resource (either because they
         // are the resource itself, or because they are highly privileged over the entire forest)
     }
-
-    // Ignore read-only ACEs which cannot be abused (e.g. to read LAPS passwords).
-    let problematic_rights = ace.access_mask & !(IGNORED_ACCESS_RIGHTS);
-    if problematic_rights == 0 {
-        return false;
-    }
-
     // Some control accesses do not grant any right on the resource itself, they are not a delegation
     if problematic_rights == ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32 {
         if let Some(guid) = ace.get_object_type() {
@@ -515,4 +523,37 @@ pub fn is_ace_part_of_a_delegation(ace: &Ace, default_aces: &[Ace], admincount: 
     }
 
     true
+}
+
+fn get_ace_derived_by_inheritance(parent_aces: &[Ace], child_owner: &Sid, child_object_type: &Guid, force_inheritance: bool) -> Vec<Ace> {
+    let mut res = vec![];
+    for parent_ace in parent_aces {
+        if !force_inheritance && (parent_ace.flags & CONTAINER_INHERIT_ACE.0 as u8) == 0 {
+            continue;
+        }
+        if let Some(guid) = parent_ace.get_inherited_object_type() {
+            if guid != child_object_type && (parent_ace.flags & NO_PROPAGATE_INHERIT_ACE.0 as u8) != 0 {
+                continue;
+            }
+        }
+        // Creator Owner SID gets replaced by the current owner
+        let trustee = if parent_ace.trustee == Sid::try_from("S-1-3-0").unwrap() {
+            child_owner
+        } else {
+            &parent_ace.trustee
+        }.to_owned();
+
+        let mut flags = parent_ace.flags;
+        if (parent_ace.flags & NO_PROPAGATE_INHERIT_ACE.0 as u8) != 0 {
+            flags &= !(CONTAINER_INHERIT_ACE.0 as u8 | OBJECT_INHERIT_ACE.0 as u8);
+        }
+
+        res.push(Ace {
+            trustee,
+            access_mask: parent_ace.access_mask,
+            flags,
+            type_specific: parent_ace.type_specific.clone(),
+        })
+    }
+    res
 }

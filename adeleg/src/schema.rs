@@ -9,7 +9,7 @@ use crate::utils::get_attr_guid;
 
 pub struct Schema {
     // Mapping from class GUID to class name
-    pub(crate) class_guids: HashMap<Guid, String>,
+    pub(crate) class_guids: HashMap<String, Guid>,
     // Default security descriptor, by domain sid then by class name
     // (they are stored in the schema as SDDL, so that they can be
     // specialized to the domain SID where objects are instantiated,
@@ -46,7 +46,7 @@ impl Schema {
             let entry = entry?;
             let guid = get_attr_guid(&[&entry], &entry.dn, "schemaidguid")?;
             let name = get_attr_str(&[&entry], &entry.dn, "ldapdisplayname")?;
-            class_guids.insert(guid, name.clone());
+            class_guids.insert(name.clone(), guid);
             // Not all classes have a default SDDL attribute (if they are not used as the most specialized class of any object)
             if let Ok(sddl) = get_attr_str(&[&entry], &entry.dn, "defaultsecuritydescriptor") {
                 for domain_sid in domain_sids {
@@ -120,7 +120,6 @@ impl Schema {
             let name = get_attr_str(&[&entry], &entry.dn, "displayname")?;
             control_access_names.insert(guid, name);
         }
-
 
         Ok(Self {
             class_guids,

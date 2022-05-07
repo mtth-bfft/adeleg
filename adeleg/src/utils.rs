@@ -45,24 +45,30 @@ pub(crate) fn get_attr_sid<T: Borrow<LdapEntry>>(search_results: &[T], base: &st
 }
 
 pub(crate) fn get_attr_sd<T: Borrow<LdapEntry>>(search_results: &[T], base: &str, attr_name: &str) -> Result<SecurityDescriptor, LdapError> {
-    let attrs = if search_results.len() > 1 {
+    let (dn, attrs) = if search_results.len() > 1 {
         return Err(LdapError::RequiredObjectCollision { dn: base.to_owned() });
     } else if search_results.len() == 0 {
         return Err(LdapError::RequiredObjectMissing { dn: base.to_owned() });
     } else {
-        &search_results[0].borrow().attrs
+        (&search_results[0].borrow().dn, &search_results[0].borrow().attrs)
     };
 
     if let Some(vals) = attrs.get(attr_name) {
         if vals.len() == 0 {
-            return Err(LdapError::RequiredAttributeMissing { dn: base.to_owned(), name: attr_name.to_owned() });
+            return Err(LdapError::RequiredAttributeMissing { dn: dn.to_owned(), name: attr_name.to_owned() });
         } else if vals.len() > 1 {
-            return Err(LdapError::AttributeValuesCollision { dn: base.to_owned(), name: attr_name.to_owned(), val1: format!("{:?}", vals[0]), val2: format!("{:?}", vals[1]) });
+            return Err(LdapError::AttributeValuesCollision { dn: dn.to_owned(), name: attr_name.to_owned(), val1: format!("{:?}", vals[0]), val2: format!("{:?}", vals[1]) });
         } else {
-            Ok(SecurityDescriptor::from_bytes(&vals[0]).unwrap())
+            match SecurityDescriptor::from_bytes(&vals[0]) {
+                Ok(sd) => Ok(sd),
+                Err(e) => {
+                    eprintln!(" [!] Unable to parse security descriptor at {} : {}", &dn, e);
+                    return Err(LdapError::RequiredAttributeMissing { dn: dn.to_owned(), name: attr_name.to_owned() });
+                }
+            }
         }
     } else {
-        Err(LdapError::RequiredAttributeMissing { dn: base.to_owned(), name: attr_name.to_owned() })
+        Err(LdapError::RequiredAttributeMissing { dn: dn.to_owned(), name: attr_name.to_owned() })
     }
 }
 
@@ -132,27 +138,21 @@ pub(crate) fn get_domains(conn: &LdapConnection) -> Result<Vec<Domain>, LdapErro
     Ok(v)
 }
 
-pub(crate) fn get_adminsdholder_sd(conn: &LdapConnection) -> Result<SecurityDescriptor, LdapError> {
-    for nc in conn.get_naming_contexts() {
-        let dn = format!("CN=AdminSDHolder,CN=System,{}", nc);
-        let mut sd_control_val = BerVal::new();
-        sd_control_val.append(BerEncodable::Sequence(vec![BerEncodable::Integer((DACL_SECURITY_INFORMATION.0).into())]));
-            let sd_control = LdapControl::new(
-            LDAP_SERVER_SD_FLAGS_OID,
-            &sd_control_val,
-            true)?;
-        let search = LdapSearch::new(&conn, Some(&dn),LDAP_SCOPE_BASE,
-        Some("(objectClass=*)"),
-        Some(&["nTSecurityDescriptor"]), &[&sd_control]);
-        if let Ok(adminsdholder) = search.collect::<Result<Vec<LdapEntry>, LdapError>>() {
-            if let Ok(sd) = get_attr_sd(&adminsdholder[..],  &dn, "ntsecuritydescriptor") {
-                return Ok(sd);
-            }
-        }
-    }
-    Err(LdapError::RequiredObjectMissing {
-        dn: "CN=AdminSDHolder,CN=System,DC=*".to_owned()
-    })
+pub(crate) fn get_adminsdholder_aces(conn: &LdapConnection, naming_context: &str, domains: &[Domain], root_domain: &Domain) -> Result<Vec<Ace>, LdapError> {
+    let nc_holding_object = &domains.iter().find(|dom| dom.distinguished_name == naming_context).unwrap_or(root_domain).distinguished_name;
+    let dn = format!("CN=AdminSDHolder,CN=System,{}", nc_holding_object);
+    let mut sd_control_val = BerVal::new();
+    sd_control_val.append(BerEncodable::Sequence(vec![BerEncodable::Integer((DACL_SECURITY_INFORMATION.0).into())]));
+        let sd_control = LdapControl::new(
+        LDAP_SERVER_SD_FLAGS_OID,
+        &sd_control_val,
+        true)?;
+    let search = LdapSearch::new(&conn, Some(&dn),LDAP_SCOPE_BASE,
+    Some("(objectClass=*)"),
+    Some(&["nTSecurityDescriptor"]), &[&sd_control]);
+    let res = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
+    let sd = get_attr_sd(&res[..],  &dn, "ntsecuritydescriptor")?;
+    Ok(sd.dacl.map(|d| d.aces).unwrap_or(vec![]))
 }
 
 pub(crate) fn pretty_print_access_rights(mask: u32) -> String {
@@ -258,8 +258,10 @@ pub(crate) fn pretty_print_ace(ace: &Ace, schema: &Schema) -> String {
     }
     match &ace.type_specific {
         AceType::AccessAllowedObject { object_type: Some(guid), .. } => {
-            if let Some(name) = schema.class_guids.get(&guid) {
-                res.push_str(&format!(" of class {}", name));
+            for (class_name, class_guid) in &schema.class_guids {
+                if class_guid == guid {
+                    res.push_str(&format!(" of class {}", class_name));
+                }
             }
             if let Some(name) = schema.property_set_names.get(&guid) {
                 res.push_str(&format!(" on property set {}", name));
@@ -277,8 +279,10 @@ pub(crate) fn pretty_print_ace(ace: &Ace, schema: &Schema) -> String {
 
     match &ace.type_specific {
         AceType::AccessAllowedObject { inherited_object_type: Some(guid), .. } => {
-            if let Some(name) = schema.class_guids.get(&guid) {
-                res.push_str(&format!(" inherit on class {}", name));
+            for (class_name, class_guid) in &schema.class_guids {
+                if class_guid == guid {
+                    res.push_str(&format!(" inherit on class {}", class_name));
+                }
             }
             res.push_str(&format!(" ({})", guid));
         },

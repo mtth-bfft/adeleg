@@ -10,7 +10,7 @@ use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
 use crate::schema::Schema;
 use crate::delegations::{get_explicit_aces, get_schema_aces, Delegation};
-use crate::utils::{get_adminsdholder_sd, pretty_print_ace, get_domains};
+use crate::utils::{get_adminsdholder_aces, pretty_print_ace, get_domains};
 
 fn main() {
     let default_port = format!("{}", LDAP_PORT);
@@ -151,14 +151,6 @@ fn main() {
         ignored_trustee_sids.insert(domain.sid.with_rid(519));   // Enterprise Admins
     }
 
-    let adminsdholder_sd = match get_adminsdholder_sd(&conn) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Unable to fetch AdminSDHolder security descriptor: {}", e);
-            std::process::exit(1);
-        }
-    };
-
     let domain_sids: Vec<Sid> = domains.iter().map(|d| d.sid.clone()).collect();
     let schema = match Schema::query(&conn, &domain_sids[..], &root_domain.sid) {
         Ok(s) => s,
@@ -232,9 +224,20 @@ fn main() {
     }
 
     let mut aces_found: HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>> = get_schema_aces(&schema, &root_domain.sid, &ignored_trustee_sids);
-    for naming_context in conn.get_naming_contexts() {
+    let mut naming_contexts = Vec::from(conn.get_naming_contexts());
+    naming_contexts.sort();
+
+    for naming_context in naming_contexts {
+        let adminsdholder_aces = match get_adminsdholder_aces(&conn, &naming_context, &domains, &root_domain) {
+            Ok(aces) => aces,
+            Err(e) => {
+                eprintln!(" [!] Unable to fetch AdminSDHolder, {} (results will be incomplete)", e);
+                vec![]
+            }
+        };
+    
         println!("Fetching security descriptors of naming context {}", naming_context);
-        match get_explicit_aces(&conn, naming_context, &root_domain.sid, &schema, &adminsdholder_sd, &ignored_trustee_sids) {
+        match get_explicit_aces(&conn, &naming_context, &root_domain.sid, &schema, &adminsdholder_aces[..], &ignored_trustee_sids) {
             Ok( sids) => {
                 for (sid, locations) in sids.into_iter() {
                     for (location, mut aces) in locations.into_iter() {

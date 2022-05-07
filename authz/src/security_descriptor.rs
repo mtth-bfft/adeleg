@@ -1,4 +1,4 @@
-use windows::Win32::Security::{IsValidSecurityDescriptor, GetSecurityDescriptorLength, GetSecurityDescriptorControl, GetSecurityDescriptorOwner, GetLengthSid, GetSecurityDescriptorGroup, GetSecurityDescriptorDacl, GetAclInformation, ACL_SIZE_INFORMATION, AclSizeInformation, ACL, GetSecurityDescriptorSacl, SECURITY_DESCRIPTOR};
+use windows::Win32::Security::{IsValidSecurityDescriptor, GetSecurityDescriptorControl, GetSecurityDescriptorOwner, GetLengthSid, GetSecurityDescriptorGroup, GetSecurityDescriptorDacl, GetAclInformation, ACL_SIZE_INFORMATION, AclSizeInformation, ACL, GetSecurityDescriptorSacl, SECURITY_DESCRIPTOR};
 use std::ptr::null_mut;
 use windows::Win32::Foundation::PSID;
 use crate::error::AuthzError;
@@ -24,11 +24,6 @@ impl SecurityDescriptor {
             return Err(AuthzError::InvalidSecurityDescriptor(slice.to_vec()));
         }
 
-        let expected_size = unsafe { GetSecurityDescriptorLength(slice.as_ptr() as *const _) };
-        if expected_size != (slice.len() as u32) {
-            return Err(AuthzError::UnexpectedSecurityDescriptorSize { bytes: slice.to_vec(), expected_size: expected_size as usize });
-        }
-
         let mut controls: u16 = 0;
         let mut revision: u32 = 0;
         let succeeded = unsafe { GetSecurityDescriptorControl(slice.as_ptr() as *const _, &mut controls as *mut _, &mut revision as *mut _) };
@@ -45,15 +40,15 @@ impl SecurityDescriptor {
                 return Err(AuthzError::GetSecurityDescriptorOwnerFailed { code: get_last_error(), ptr: null_mut(), bytes: slice.to_vec() });
             }
             else if psid.0 == 0 {
-                None
+                None // a NULL pointer is returned if there is no owner in this SD
             }
             else if (psid.0 as usize) < (slice.as_ptr() as usize) || (psid.0 as usize) >= (slice.as_ptr() as usize + slice.len()) {
-                return Err(AuthzError::GetSecurityDescriptorOwnerFailed { code: 0, ptr: psid.0 as *const u8, bytes: slice.to_vec() });
+                return Err(AuthzError::GetSecurityDescriptorOwnerFailed { code: u32::MAX, ptr: psid.0 as *const u8, bytes: slice.to_vec() });
             }
             else {
                 let expected_size = unsafe { GetLengthSid(psid) } as usize;
                 if (psid.0 as usize + expected_size) > (slice.as_ptr() as usize + slice.len()) {
-                    return Err(AuthzError::GetSecurityDescriptorOwnerFailed { code: 0, ptr: psid.0 as *const u8, bytes: slice.to_vec() });
+                    return Err(AuthzError::GetSecurityDescriptorOwnerFailed { code: u32::MAX, ptr: psid.0 as *const u8, bytes: slice.to_vec() });
                 }
                 let offset = (psid.0 as usize) - (slice.as_ptr() as usize);
                 Some(Sid::from_bytes(&slice[offset..offset+expected_size])?)
@@ -69,16 +64,16 @@ impl SecurityDescriptor {
                 return Err(AuthzError::GetSecurityDescriptorGroupFailed { code: get_last_error(), ptr: null_mut(), bytes: slice.to_vec() });
             }
             else if psid.0 == 0 {
-                None
+                None // a NULL pointer is returned if there is no primary group in this SD
             }
             else if (psid.0 as usize) < (slice.as_ptr() as usize) || (psid.0 as usize) >= (slice.as_ptr() as usize + slice.len()) {
-                return Err(AuthzError::GetSecurityDescriptorGroupFailed { code: 0, ptr: psid.0 as *const u8, bytes: slice.to_vec() });
+                return Err(AuthzError::GetSecurityDescriptorGroupFailed { code: u32::MAX, ptr: psid.0 as *const u8, bytes: slice.to_vec() });
             }
             else {
                 let expected_size = unsafe { GetLengthSid(psid) } as usize;
                 let offset = (psid.0 as usize) - (slice.as_ptr() as usize);
                 if (offset + expected_size) > slice.len() {
-                    return Err(AuthzError::UnexpectedSidSize { bytes: slice.to_vec(), expected_size });
+                    return Err(AuthzError::GetSecurityDescriptorGroupFailed { code: u32::MAX, ptr: psid.0 as *const u8, bytes: slice.to_vec() });
                 }
                 Some(Sid::from_bytes(&slice[offset..offset+expected_size])?)
             }
@@ -94,10 +89,10 @@ impl SecurityDescriptor {
                 return Err(AuthzError::GetSecurityDescriptorDaclFailed { code: get_last_error(), ptr: null_mut(), bytes: slice.to_vec() });
             }
             else if acl.is_null() {
-                None
+                None // a NULL pointer is returned if there is no DACL in this SD
             }
             else if (acl as usize) < (slice.as_ptr() as usize) || (acl as usize) >= (slice.as_ptr() as usize + slice.len()) {
-                return Err(AuthzError::GetSecurityDescriptorDaclFailed { code: 0, ptr: acl as *const u8, bytes: slice.to_vec() });
+                return Err(AuthzError::GetSecurityDescriptorDaclFailed { code: u32::MAX, ptr: acl as *const u8, bytes: slice.to_vec() });
             }
             else {
                 let mut size_info = ACL_SIZE_INFORMATION {
@@ -107,7 +102,7 @@ impl SecurityDescriptor {
                 };
                 let succeeded = unsafe { GetAclInformation(acl, &mut size_info as *mut _ as *mut _, std::mem::size_of_val(&size_info) as u32, AclSizeInformation) };
                 if !succeeded.as_bool() {
-                    return Err(AuthzError::GetAclInformationFailed { code: get_last_error(), bytes: slice.to_vec()});
+                    return Err(AuthzError::GetAclInformationFailed { bytes: slice.to_vec(), code: get_last_error() });
                 }
                 let expected_size = (size_info.AclBytesInUse + size_info.AclBytesFree) as usize;
                 let offset = (acl as usize) - (slice.as_ptr() as usize);
@@ -128,7 +123,7 @@ impl SecurityDescriptor {
                 return Err(AuthzError::GetSecurityDescriptorSaclFailed { code: get_last_error(), ptr: null_mut(), bytes: slice.to_vec() });
             }
             else if acl.is_null() {
-                None
+                None // a NULL pointer is returned if there is no SACL in this SD
             }
             else if (acl as usize) < (slice.as_ptr() as usize) || (acl as usize) >= (slice.as_ptr() as usize + slice.len()) {
                 return Err(AuthzError::GetSecurityDescriptorSaclFailed { code: 0, ptr: acl as *const u8, bytes: slice.to_vec() });
