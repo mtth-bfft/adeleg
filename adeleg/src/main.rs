@@ -1,19 +1,26 @@
+//#![windows_subsystem = "windows"]
+
 mod utils;
 mod schema;
 mod delegations;
-use std::collections::{HashMap, HashSet};
+mod engine;
+mod gui;
 
+use std::collections::{HashMap, HashSet};
 use authz::{Ace, Sid};
 use delegations::{DelegationLocation, DelegationTemplate};
 use utils::resolve_trustee_to_sid;
 use winldap::connection::{LdapConnection, LdapCredentials};
 use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
+use crate::gui::run_gui;
 use crate::schema::Schema;
+use crate::engine::Engine;
 use crate::delegations::{get_explicit_aces, get_schema_aces, Delegation};
 use crate::utils::{get_adminsdholder_aces, pretty_print_ace, get_domains};
 
 fn main() {
+    run_gui();
     let default_port = format!("{}", LDAP_PORT);
     let app = App::new(env!("CARGO_PKG_NAME"))
         .version(env!("CARGO_PKG_VERSION"))
@@ -138,26 +145,6 @@ fn main() {
         }
     };
 
-    // Derive a list of trustees to ignore
-    let mut ignored_trustee_sids: HashSet<Sid> = HashSet::from([
-        Sid::try_from("S-1-5-10").expect("invalid SID"),     // SELF
-        Sid::try_from("S-1-3-0").expect("invalid SID"),      // Creator Owner
-        Sid::try_from("S-1-5-18").expect("invalid SID"),     // Local System
-        Sid::try_from("S-1-5-20").expect("invalid SID"),     // Network Service
-        Sid::try_from("S-1-5-32-544").expect("invalid SID"), // Administrators
-        Sid::try_from("S-1-5-9").expect("invalid SID"),      // Enterprise Domain Controllers
-        Sid::try_from("S-1-5-32-548").expect("invalid SID"), // Account Operators
-        Sid::try_from("S-1-5-32-549").expect("invalid SID"), // Server Operators
-        Sid::try_from("S-1-5-32-550").expect("invalid SID"), // Print Operators
-        Sid::try_from("S-1-5-32-551").expect("invalid SID"), // Backup Operators
-    ]);
-    for domain in &domains {
-        ignored_trustee_sids.insert(domain.sid.with_rid(512));   // Domain Admins
-        ignored_trustee_sids.insert(domain.sid.with_rid(516));   // Domain Controllers
-        ignored_trustee_sids.insert(domain.sid.with_rid(518));   // Schema Admins
-        ignored_trustee_sids.insert(domain.sid.with_rid(519));   // Enterprise Admins
-    }
-
     let domain_sids: Vec<Sid> = domains.iter().map(|d| d.sid.clone()).collect();
     let schema = match Schema::query(&conn, &domain_sids[..], &root_domain.sid) {
         Ok(s) => s,
@@ -167,35 +154,31 @@ fn main() {
         }
     };
 
-    let templates: HashMap<String, DelegationTemplate> = {
-        let mut res = HashMap::new();
-        if let Some(input_filepaths) = args.values_of("templates") {
-            for input_filepath in input_filepaths.into_iter() {
-                let json = match std::fs::read_to_string(input_filepath) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        eprintln!(" [!] Unable to open file {} : {}", input_filepath, e);
-                        std::process::exit(1);
+    let mut engine = Engine::new(&conn, &domains, root_domain, &schema);
+
+    if let Some(input_filepaths) = args.values_of("templates") {
+        for input_filepath in input_filepaths.into_iter() {
+            let json = match std::fs::read_to_string(input_filepath) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!(" [!] Unable to open file {} : {}", input_filepath, e);
+                    std::process::exit(1);
+                }
+            };
+            match DelegationTemplate::from_json(&json, &schema) {
+                Ok(v) => {
+                    for template in v.into_iter() {
+                        engine.register_template(template);
                     }
-                };
-                match DelegationTemplate::from_json(&json, &schema) {
-                    Ok(v) => {
-                        for model in v.into_iter() {
-                            res.insert(model.name.clone(), model);
-                        }
-                    },
-                    Err(e) => {
-                        eprintln!(" [!] Unable to parse template file {} : {}", input_filepath, e);
-                        std::process::exit(1);
-                    }
+                },
+                Err(e) => {
+                    eprintln!(" [!] Unable to parse template file {} : {}", input_filepath, e);
+                    std::process::exit(1);
                 }
             }
         }
-        res
-    };
+    }
 
-    // Derive expected ACEs from these delegations, and index these ACEs by Sid then Location
-    let mut delegations_in_input: HashMap<Sid, HashMap<DelegationLocation, Vec<(Delegation, Vec<Ace>)>>> = HashMap::new();
     if let Some(input_files) = args.values_of("delegations") {
         for input_filepath in input_files.into_iter() {
             let json = match std::fs::read_to_string(input_filepath) {
@@ -205,61 +188,20 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            let delegations = match Delegation::from_json(&json, &templates) {
+            let delegations = match Delegation::from_json(&json, &engine.templates) {
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!(" [!] Unable to parse delegation file {} : {}", input_filepath, e);
                     std::process::exit(1);
                 }
             };
-            for delegation in &delegations {
-                let expected_aces = match delegation.derive_aces(&conn, &root_domain, &domains) {
-                    Ok(h) => h,
-                    Err(e) => {
-                        eprintln!(" [!] Unable to compute expected ACEs from file \"{}\" : {}", input_filepath, e);
-                        std::process::exit(1);
-                    }
-                };
-                for (location, aces) in expected_aces {
-                    let sid = aces.get(0).expect("delegations should have at least one ACE").trustee.clone();
-                    delegations_in_input.entry(sid).or_insert(HashMap::new())
-                        .entry(location).or_insert(vec![])
-                        .push((delegation.clone(), aces));
-                }
+            for delegation in delegations.into_iter() {
+                engine.register_delegation(delegation);
             }
         }
     }
 
-    let mut aces_found: HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>> = get_schema_aces(&schema, &root_domain.sid, &ignored_trustee_sids);
-    let mut naming_contexts = Vec::from(conn.get_naming_contexts());
-    naming_contexts.sort();
-
-    for naming_context in naming_contexts {
-        let adminsdholder_aces = match get_adminsdholder_aces(&conn, &naming_context, &domains, &root_domain) {
-            Ok(aces) => aces,
-            Err(e) => {
-                eprintln!(" [!] Unable to fetch AdminSDHolder, {} (results will be incomplete)", e);
-                vec![]
-            }
-        };
-    
-        println!("Fetching security descriptors of naming context {}", naming_context);
-        match get_explicit_aces(&conn, &naming_context, &root_domain.sid, &schema, &adminsdholder_aces[..], &ignored_trustee_sids) {
-            Ok( sids) => {
-                for (sid, locations) in sids.into_iter() {
-                    for (location, mut aces) in locations.into_iter() {
-                        aces_found.entry(sid.clone()).or_insert(HashMap::new())
-                            .entry(location).or_insert(vec![])
-                            .append(&mut aces);
-                    }
-                }
-            },
-            Err(e) => {
-                eprintln!(" [!] Error when fetching security descriptors of naming context {} : {}", naming_context, e);
-                std::process::exit(1);
-            },
-        };
-    }
+    let mut aces_found = engine.fetch_aces();
 
     if let Some(trustee) = args.value_of("trustee") {
         let sid = match resolve_trustee_to_sid(trustee, &conn, &domains) {
@@ -279,7 +221,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    for (trustee, locations) in &aces_found {
+    /*for (trustee, locations) in &aces_found {
         for (location, aces) in locations {
             // Check if the expected delegations are in place, while keeping track of which ACEs are explained
             // by >= 1 delegation (so that, at the end, we can say which ACEs are not covered by a known delegation)
@@ -314,7 +256,7 @@ fn main() {
                 eprintln!("");
             }
         }
-    }
+    }*/
 }
 
 fn ace_equivalent(a: &Ace, b: &Ace) -> bool {

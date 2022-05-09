@@ -27,6 +27,8 @@ pub struct LdapConnection {
     pub(crate) configuration_naming_context: String,
 }
 
+unsafe impl Send for LdapConnection { }
+
 impl LdapConnection {
     pub fn new(server: Option<&str>, port: u16, credentials: Option<&LdapCredentials>) -> Result<Self, LdapError> {
         let handle = unsafe {

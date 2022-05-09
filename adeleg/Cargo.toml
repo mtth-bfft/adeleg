@@ -10,6 +10,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.79"
 authz = { path = "../authz", features = ["serial"] }
 winldap = { path = "../winldap" }
+native-windows-gui = "1.0.12"
+native-windows-derive = "1.0.3"
 
 [dependencies.windows]
 version = "0.32.0"
