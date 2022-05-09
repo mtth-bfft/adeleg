@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use authz::{Ace, Sid};
 use delegations::{DelegationLocation, DelegationTemplate};
+use utils::resolve_trustee_to_sid;
 use winldap::connection::{LdapConnection, LdapCredentials};
 use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
@@ -71,6 +72,12 @@ fn main() {
                 .short('D')
                 .value_name("D.json")
                 .multiple_occurrences(true)
+                .number_of_values(1)
+        ).arg(
+            Arg::new("trustee")
+                .help("only show delegations granted to this trustee")
+                .long("trustee")
+                .value_name("SID|samaccountname|DN")
                 .number_of_values(1)
         );
 
@@ -252,6 +259,19 @@ fn main() {
                 std::process::exit(1);
             },
         };
+    }
+
+    if let Some(trustee) = args.value_of("trustee") {
+        let sid = match resolve_trustee_to_sid(trustee, &conn, &domains) {
+            Some(sid) => sid,
+            None => {
+                eprintln!("Error: Could not resolve trustee \"{}\" (valid syntaxes are SIDs (S-1-5-21-*), distinguished names, and NetbiosName\\samAccountName)", trustee);
+                std::process::exit(1);
+            },
+        };
+        let res = aces_found.get(&sid).cloned().unwrap_or_default();
+        aces_found.clear();
+        aces_found.insert(sid, res.to_owned());
     }
 
     if let Err(e) = conn.destroy() {
