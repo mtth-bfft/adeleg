@@ -9,7 +9,6 @@ mod gui;
 use std::collections::{HashMap, HashSet};
 use authz::{Ace, Sid};
 use delegations::{DelegationLocation, DelegationTemplate};
-use utils::resolve_trustee_to_sid;
 use winldap::connection::{LdapConnection, LdapCredentials};
 use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
@@ -17,7 +16,7 @@ use crate::gui::run_gui;
 use crate::schema::Schema;
 use crate::engine::Engine;
 use crate::delegations::{get_explicit_aces, get_schema_aces, Delegation};
-use crate::utils::{get_adminsdholder_aces, pretty_print_ace, get_domains};
+use crate::utils::{get_adminsdholder_aces, get_domains};
 
 fn main() {
     run_gui();
@@ -120,174 +119,66 @@ fn main() {
         }
     };
 
-    let domains = match get_domains(&conn) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("Unable to list domains: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    let root_domain = {
-        let root_nc = conn.get_root_domain_naming_context();
-        let mut res = None;
-        for domain in &domains {
-            if domain.distinguished_name == root_nc {
-                res = Some(domain);
-                break;
-            }
-        }
-        if let Some(d) = res { 
-            d
-        } else {
-            eprintln!("Unable to find root domain naming context on this domain controller");
-            std::process::exit(1);
-        }
-    };
-
-    let domain_sids: Vec<Sid> = domains.iter().map(|d| d.sid.clone()).collect();
-    let schema = match Schema::query(&conn, &domain_sids[..], &root_domain.sid) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Unable to fetch required information from schema: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    let mut engine = Engine::new(&conn, &domains, root_domain, &schema);
+    let mut engine = Engine::new(&conn);
 
     if let Some(input_filepaths) = args.values_of("templates") {
         for input_filepath in input_filepaths.into_iter() {
-            let json = match std::fs::read_to_string(input_filepath) {
-                Ok(f) => f,
-                Err(e) => {
-                    eprintln!(" [!] Unable to open file {} : {}", input_filepath, e);
-                    std::process::exit(1);
-                }
-            };
-            match DelegationTemplate::from_json(&json, &schema) {
-                Ok(v) => {
-                    for template in v.into_iter() {
-                        engine.register_template(template);
-                    }
-                },
-                Err(e) => {
-                    eprintln!(" [!] Unable to parse template file {} : {}", input_filepath, e);
-                    std::process::exit(1);
-                }
+            if let Err(e) = engine.register_template(input_filepath) {
+                eprintln!("{}", e);
+                std::process::exit(1);
             }
         }
     }
 
     if let Some(input_files) = args.values_of("delegations") {
         for input_filepath in input_files.into_iter() {
-            let json = match std::fs::read_to_string(input_filepath) {
-                Ok(f) => f,
-                Err(e) => {
-                    eprintln!(" [!] Unable to open file {} : {}", input_filepath, e);
-                    std::process::exit(1);
-                }
-            };
-            let delegations = match Delegation::from_json(&json, &engine.templates) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!(" [!] Unable to parse delegation file {} : {}", input_filepath, e);
-                    std::process::exit(1);
-                }
-            };
-            for delegation in delegations.into_iter() {
-                engine.register_delegation(delegation);
+            if let Err(e) = engine.register_delegation(input_filepath) {
+                eprintln!("{}", e);
+                std::process::exit(1);
             }
         }
     }
 
-    let mut aces_found = engine.fetch_aces();
+    let mut res = engine.run();
 
     if let Some(trustee) = args.value_of("trustee") {
-        let sid = match resolve_trustee_to_sid(trustee, &conn, &domains) {
+        let sid = match engine.resolve_str_to_sid(trustee) {
             Some(sid) => sid,
             None => {
                 eprintln!("Error: Could not resolve trustee \"{}\" (valid syntaxes are SIDs (S-1-5-21-*), distinguished names, and NetbiosName\\samAccountName)", trustee);
                 std::process::exit(1);
             },
         };
-        let res = aces_found.get(&sid).cloned().unwrap_or_default();
-        aces_found.clear();
-        aces_found.insert(sid, res.to_owned());
+        let bak = res.get(&sid).cloned().unwrap_or_default();
+        res.clear();
     }
 
-    if let Err(e) = conn.destroy() {
-        eprintln!("Error when closing connection to \"{}:{}\" : {}", server.unwrap_or(""), port, e);
-        std::process::exit(1);
-    }
-
-    /*for (trustee, locations) in &aces_found {
-        for (location, aces) in locations {
-            // Check if the expected delegations are in place, while keeping track of which ACEs are explained
-            // by >= 1 delegation (so that, at the end, we can say which ACEs are not covered by a known delegation)
-            let mut aces_explained: Vec<(&Ace, bool)> = aces.iter().map(|ace| (ace, false)).collect();
-
-            let expected_delegations = delegations_in_input.get(trustee)
-                .and_then(|h| h.get(&location).map(|v| v.as_slice()))
-                .unwrap_or(&[]);
-            for (_, expected_aces) in expected_delegations {
-                if let Some(positions) = find_ace_positions(&expected_aces, &aces[..]) {
-                    for pos in positions {
-                        aces_explained[pos].1 = true;
-                    }
+    for (trustee, locations) in &res {
+        println!("\n======= {}", engine.resolve_sid(trustee));
+        for (location, (deleg_found, deleg_missing, orphan_aces)) in locations {
+            println!(" > {:?}", location);
+            if !deleg_found.is_empty() {
+                println!("   Delegations in place:");
+                for delegation in deleg_found {
+                    println!("   {:?}", delegation);
                 }
+                println!("");
             }
-
-            if aces_explained.iter().any(|(_, explained)| !*explained) {
-                println!("====== Considering {} on {:?}", &trustee, &location);
-
-                eprintln!(" [.] Expected ACEs:");
-                for (delegation, aces) in expected_delegations {
-                    for ace in aces {
-                        eprintln!("          {:?} (from template \"{}\")", pretty_print_ace(ace, &schema), delegation.template_name);
-                    }
+            if !deleg_missing.is_empty() {
+                println!("   Delegations missing:");
+                for delegation in deleg_missing {
+                    println!("   {:?}", delegation);
                 }
-
-                eprintln!(" [.] ACEs found:");
-                for (ace, explained) in aces_explained {
-                    eprintln!("          {} {}", if explained { "[OK]" } else { "[!!]" }, pretty_print_ace(ace, &schema));
+                println!("");
+            }
+            if !orphan_aces.is_empty() {
+                println!("   ACEs:");
+                for ace in orphan_aces {
+                    println!("   {:?}", ace);
                 }
-
-                eprintln!("");
+                println!("");
             }
         }
-    }*/
-}
-
-fn ace_equivalent(a: &Ace, b: &Ace) -> bool {
-    if a == b {
-        return true;
+        println!("");
     }
-
-    let mut a = a.clone();
-    let mut b = b.clone();
-
-    a.access_mask = a.access_mask & !(delegations::IGNORED_ACCESS_RIGHTS);
-    b.access_mask = b.access_mask & !(delegations::IGNORED_ACCESS_RIGHTS);
-
-    a == b
-}
-
-fn find_ace_positions(needle: &[Ace], haystack: &[Ace]) -> Option<Vec<usize>> {
-    let mut res = vec![];
-    let mut iter = haystack.iter().enumerate();
-    for needle_ace in needle {
-        let mut found = false;
-        while let Some((haystack_pos, haystack_ace)) = iter.next() {
-            if ace_equivalent(haystack_ace, needle_ace) {
-                res.push(haystack_pos);
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            return None;
-        }
-    }
-    Some(res)
 }

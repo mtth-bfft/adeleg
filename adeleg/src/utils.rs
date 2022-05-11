@@ -240,6 +240,14 @@ pub(crate) fn pretty_print_access_rights(mask: u32) -> String {
     res.join(" | ")
 }
 
+pub(crate) fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().collect::<String>() + &c.as_str().to_lowercase(),
+    }
+}
+
 pub(crate) fn pretty_print_ace(ace: &Ace, schema: &Schema) -> String {
     let mut res = format!("{} {} access mask 0x{:X} ({})", if ace.grants_access() { "allow" } else { "deny " },
         &ace.trustee, &ace.access_mask,
@@ -307,33 +315,4 @@ pub(crate) fn resolve_samaccountname_to_sid(ldap: &LdapConnection, samaccountnam
     let search = LdapSearch::new(&ldap, Some(&domain.distinguished_name), LDAP_SCOPE_SUBTREE, Some(&format!("(samAccountName={})", samaccountname)), Some(&["objectSid"]), &[]);
     let res = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
     get_attr_sid(&res, &domain.distinguished_name, "objectsid")
-}
-
-pub(crate) fn resolve_trustee_to_sid(trustee: &str, conn: &LdapConnection, domains: &[Domain]) -> Option<Sid> {
-    if let Some((netbios_name,username)) = trustee.split_once("\\") {
-        for domain in domains {
-            if domain.netbios_name.to_lowercase() == netbios_name.to_lowercase() {
-                let search = LdapSearch::new(&conn, Some(&domain.distinguished_name), LDAP_SCOPE_SUBTREE, Some(&format!("(samAccountName={})", username)), Some(&["objectSid"]), &[]);
-                if let Ok(res) = search.collect::<Result<Vec<LdapEntry>, LdapError>>() {
-                    if let Ok(sid) = get_attr_sid(&res, &domain.distinguished_name, "objectsid") {
-                        return Some(sid);
-                    }
-                }
-            }
-        }
-        return None;
-    }
-    for nc in conn.get_naming_contexts() {
-        if ends_with_case_insensitive(nc, trustee) {
-            let search = LdapSearch::new(&conn, Some(&trustee), LDAP_SCOPE_BASE, None, Some(&["objectSid"]), &[]);
-            return match search.collect::<Result<Vec<LdapEntry>, LdapError>>() {
-                Ok(res) => get_attr_sid(&res, &trustee, "objectsid").map(|sid| Some(sid)).unwrap_or(None),
-                _ => None
-            };
-        }
-    }
-    if let Ok(sid) = Sid::try_from(trustee) {
-        return Some(sid);
-    }
-    None
 }
