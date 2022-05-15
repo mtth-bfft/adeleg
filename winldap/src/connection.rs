@@ -31,13 +31,7 @@ unsafe impl Send for LdapConnection { }
 
 impl LdapConnection {
     pub fn new(server: Option<&str>, port: u16, credentials: Option<&LdapCredentials>) -> Result<Self, LdapError> {
-        let handle = unsafe {
-            if let Some(server) = server {
-                ldap_initW(server, port as u32)
-            } else {
-                ldap_initW(None, port as u32)
-            }
-        };
+        let handle = unsafe { ldap_initW(server.unwrap_or(""), port as u32) };
         if handle.is_null() {
             return Err(LdapError::ConnectionFailed(get_ldap_errcode()));
         }
