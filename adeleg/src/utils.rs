@@ -248,57 +248,6 @@ pub(crate) fn capitalize(s: &str) -> String {
     }
 }
 
-pub(crate) fn pretty_print_ace(ace: &Ace, schema: &Schema) -> String {
-    let mut res = format!("{} {} access mask 0x{:X} ({})", if ace.grants_access() { "allow" } else { "deny " },
-        &ace.trustee, &ace.access_mask,
-        pretty_print_access_rights(ace.access_mask));
-    if ace.get_inherit_only() {
-        res.push_str(" inherit_only");
-    }
-    if ace.get_no_propagate() {
-        res.push_str(" no_propagate");
-    }
-    if ace.get_container_inherit() {
-        res.push_str(" container_inherit");
-    }
-    if ace.get_object_inherit() {
-        res.push_str(" object_inherit");
-    }
-    match &ace.type_specific {
-        AceType::AccessAllowedObject { object_type: Some(guid), .. } => {
-            for (class_name, class_guid) in &schema.class_guids {
-                if class_guid == guid {
-                    res.push_str(&format!(" of class {}", class_name));
-                }
-            }
-            if let Some(name) = schema.property_set_names.get(&guid) {
-                res.push_str(&format!(" on property set {}", name));
-            }
-            if let Some(name) = schema.attribute_guids.get(&guid) {
-                res.push_str(&format!(" on attribute {}", name));
-            }
-            if let Some(name) = schema.control_access_names.get(&guid) {
-                res.push_str(&format!(" perform {}", name));
-            }
-            res.push_str(&format!(" ({})", guid));
-        },
-        _ => (),
-    }
-
-    match &ace.type_specific {
-        AceType::AccessAllowedObject { inherited_object_type: Some(guid), .. } => {
-            for (class_name, class_guid) in &schema.class_guids {
-                if class_guid == guid {
-                    res.push_str(&format!(" inherit on class {}", class_name));
-                }
-            }
-            res.push_str(&format!(" ({})", guid));
-        },
-        _ => (),
-    }
-    res
-}
-
 pub(crate) fn replace_suffix_case_insensitive<'a>(haystack: &'a str, suffix: &str, replacement: &str) -> String {
     if haystack.to_lowercase().ends_with(&suffix.to_lowercase()) && haystack.is_char_boundary(haystack.len() - suffix.len()) {
         format!("{}{}", &haystack[..haystack.len() - suffix.len()], replacement)

@@ -3,6 +3,7 @@ extern crate native_windows_derive as nwd;
 
 use std::collections::HashMap;
 use std::{cell::RefCell, borrow::Borrow};
+use stretch::{geometry::Size, style::{FlexDirection, Dimension, PositionType, Style}};
 use std::rc::Rc;
 use nwg::{NativeUi, FontBuilder, ProgressBarFlags, TreeItem};
 use nwd::NwgUi;
@@ -15,7 +16,7 @@ use crate::utils::{ends_with_case_insensitive, replace_suffix_case_insensitive};
 #[derive(Default, NwgUi)]
 pub struct BasicApp {
     engine: Option<RefCell<Engine<'static>>>,
-    results: Option<RefCell<HashMap<Sid, HashMap<DelegationLocation, (Vec<Delegation>, Vec<Delegation>, Vec<Ace>)>>>>,
+    results: Option<RefCell<HashMap<Sid, HashMap<DelegationLocation, (Vec<Ace>, Vec<Delegation>, Vec<Delegation>)>>>>,
 
     #[nwg_control(maximized: true, title: "ADeleg", flags: "MAIN_WINDOW|VISIBLE")]
     #[nwg_events(
@@ -52,56 +53,65 @@ pub struct BasicApp {
     #[nwg_control(parent: menu_help, text: "About...")]
     menu_help_about: nwg::Menu,
 
-    #[nwg_layout(parent: window, spacing: 1)]
-    grid: nwg::GridLayout,
+    #[nwg_layout(parent: window, flex_direction: FlexDirection::Column)]
+    flex: nwg::FlexboxLayout,
 
     #[nwg_control(parent: window, focus: true)]
-    #[nwg_layout_item(layout: grid, row: 0, col: 0, row_span: 3)]
+    #[nwg_layout_item(layout: flex)]
     #[nwg_events(OnTreeItemSelectionChanged: [BasicApp::handle_treeview_select])]
     tree_view: nwg::TreeView,
 
-    #[nwg_control(parent: window, ex_flags: nwg::ListViewExFlags::from_bits(nwg::ListViewExFlags::HEADER_DRAG_DROP.bits() | nwg::ListViewExFlags::FULL_ROW_SELECT.bits() | nwg::ListViewExFlags::BORDER_SELECT.bits()).unwrap())]
-    #[nwg_layout_item(layout: grid, col: 1, row: 0, col_span: 2)]
-    orphan_aces: nwg::ListView,
+    #[nwg_control(list_style: nwg::ListViewStyle::Detailed, ex_flags: nwg::ListViewExFlags::from_bits(nwg::ListViewExFlags::HEADER_DRAG_DROP.bits() | nwg::ListViewExFlags::FULL_ROW_SELECT.bits() | nwg::ListViewExFlags::BORDER_SELECT.bits()).unwrap())]
+    #[nwg_layout_item(layout: flex)]
+    list_orphan_ace: nwg::ListView,
 
-    #[nwg_control(parent: window, ex_flags: nwg::ListViewExFlags::from_bits(nwg::ListViewExFlags::HEADER_DRAG_DROP.bits() | nwg::ListViewExFlags::FULL_ROW_SELECT.bits() | nwg::ListViewExFlags::BORDER_SELECT.bits()).unwrap())]
-    #[nwg_layout_item(layout: grid, col: 1, row: 1, col_span: 2)]
-    delegs_missing: nwg::ListView,
+    #[nwg_control(list_style: nwg::ListViewStyle::Detailed, ex_flags: nwg::ListViewExFlags::from_bits(nwg::ListViewExFlags::HEADER_DRAG_DROP.bits() | nwg::ListViewExFlags::FULL_ROW_SELECT.bits() | nwg::ListViewExFlags::BORDER_SELECT.bits()).unwrap())]
+    #[nwg_layout_item(layout: flex)]
+    list_deleg_missing: nwg::ListView,
 
-    #[nwg_control(parent: window, ex_flags: nwg::ListViewExFlags::from_bits(nwg::ListViewExFlags::HEADER_DRAG_DROP.bits() | nwg::ListViewExFlags::FULL_ROW_SELECT.bits() | nwg::ListViewExFlags::BORDER_SELECT.bits()).unwrap())]
-    #[nwg_layout_item(layout: grid, col: 1, row: 2, col_span: 2)]
-    delegs_found: nwg::ListView,
+    #[nwg_control(list_style: nwg::ListViewStyle::Detailed, ex_flags: nwg::ListViewExFlags::from_bits(nwg::ListViewExFlags::HEADER_DRAG_DROP.bits() | nwg::ListViewExFlags::FULL_ROW_SELECT.bits() | nwg::ListViewExFlags::BORDER_SELECT.bits()).unwrap())]
+    #[nwg_layout_item(layout: flex)]
+    list_deleg_found: nwg::ListView,
 }
 
 impl BasicApp {
     fn init(&self) {
-        self.orphan_aces.set_headers_enabled(true);
-        self.orphan_aces.set_list_style(nwg::ListViewStyle::Detailed);
-        self.orphan_aces.insert_column(nwg::InsertListViewColumn {
-            width: Some(200),
+        self.list_orphan_ace.set_headers_enabled(true);
+        self.list_orphan_ace.insert_column(nwg::InsertListViewColumn {
+            width: Some(100),
             text: Some("Resource".to_owned()),
             ..Default::default()
         });
-        self.orphan_aces.insert_column(nwg::InsertListViewColumn {
+        self.list_orphan_ace.insert_column(nwg::InsertListViewColumn {
             text: Some("Access rights".to_owned()),
             ..Default::default()
         });
-        self.delegs_missing.insert_column("DN");
-        self.delegs_missing.set_headers_enabled(true);
-        self.delegs_missing.set_list_style(nwg::ListViewStyle::Detailed);
-        self.delegs_found.insert_column("DN");
-        self.delegs_found.set_headers_enabled(true);
-        self.delegs_found.set_list_style(nwg::ListViewStyle::Detailed);
-
+        self.list_deleg_missing.set_headers_enabled(true);
+        self.list_deleg_missing.insert_column(nwg::InsertListViewColumn {
+            width: Some(100),
+            text: Some("Resource".to_owned()),
+            ..Default::default()
+        });
+        self.list_deleg_missing.insert_column(nwg::InsertListViewColumn {
+            text: Some("Access rights".to_owned()),
+            ..Default::default()
+        });
+        self.list_deleg_found.set_headers_enabled(true);
+        self.list_deleg_found.insert_column(nwg::InsertListViewColumn {
+            width: Some(100),
+            text: Some("Resource".to_owned()),
+            ..Default::default()
+        });
+        self.list_deleg_found.insert_column(nwg::InsertListViewColumn {
+            text: Some("Access rights".to_owned()),
+            ..Default::default()
+        });
         self.refresh();
     }
 
     fn refresh(&self) {
         self.window.focus();
         self.tree_view.clear();
-        self.orphan_aces.clear();
-        self.delegs_missing.clear();
-        self.delegs_found.clear();
 
         self.tree_view.insert_item("Loading...", None, nwg::TreeInsert::Root);
         self.tree_view.set_enabled(false);
@@ -222,11 +232,9 @@ impl BasicApp {
     }
 
     fn handle_treeview_select(&self) {
-        self.orphan_aces.clear();
-        self.delegs_missing.clear();
-        self.delegs_found.clear();
-        self.orphan_aces.set_headers_enabled(true);
-        self.orphan_aces.set_list_style(nwg::ListViewStyle::Detailed);
+        self.list_orphan_ace.clear();
+        self.list_deleg_missing.clear();
+        self.list_deleg_found.clear();
 
         let mut selected_dn = String::new();
         let mut node = self.tree_view.selected_item();
@@ -243,24 +251,21 @@ impl BasicApp {
             }
             node = self.tree_view.parent(&item);
         }
+
         if let Some(sid) = self.engine.as_ref().unwrap().borrow().resolve_str_to_sid(&selected_dn) {
             let results = self.results.as_ref().unwrap().borrow();
             let engine = self.engine.as_ref().unwrap().borrow();
+
             if let Some(locations) = results.get(&sid) {
-                for (location, (deleg_found, deleg_missing, orphan_aces)) in locations {
+                for (location, (orphan_aces, deleg_missing, deleg_found)) in locations {
                     for ace in orphan_aces {
-                        let pretty_location = match location {
-                            DelegationLocation::DefaultSecurityDescriptor(c) => format!("All objects of class {}", c),
-                            DelegationLocation::Dn(d) => d.to_owned(),
-                            DelegationLocation::Global => format!("Global"),
-                        };
-                        self.orphan_aces.insert_item(nwg::InsertListViewItem {
+                        self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 0,
-                            text: Some(pretty_location),
+                            text: Some(location.to_string()),
                             image: None,
                         });
-                        self.orphan_aces.insert_item(nwg::InsertListViewItem {
+                        self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 1,
                             text: Some(engine.describe_ace(ace)),
@@ -268,10 +273,32 @@ impl BasicApp {
                         });
                     }
                     for delegation in deleg_missing {
-                        self.delegs_missing.insert_item(format!("{:?} {:?}", location, delegation));
+                        self.list_deleg_missing.insert_item(nwg::InsertListViewItem {
+                            index: Some(0),
+                            column_index: 0,
+                            text: Some(location.to_string()),
+                            image: None,
+                        });
+                        self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
+                            index: Some(0),
+                            column_index: 1,
+                            text: Some(delegation.template_name.clone()),
+                            image: None,
+                        });
                     }
                     for delegation in deleg_found {
-                        self.delegs_found.insert_item(format!("{:?} {:?}", location, delegation));
+                        self.list_deleg_found.insert_item(nwg::InsertListViewItem {
+                            index: Some(0),
+                            column_index: 0,
+                            text: Some(location.to_string()),
+                            image: None,
+                        });
+                        self.list_deleg_found.insert_item(nwg::InsertListViewItem {
+                            index: Some(0),
+                            column_index: 1,
+                            text: Some(delegation.template_name.clone()),
+                            image: None,
+                        });
                     }
                 }
             }
@@ -406,7 +433,7 @@ impl ConnectionDialog {
         };
 
         self.window.set_visible(false);
-        let engine = RefCell::new(Engine::new(Box::leak(Box::new(ldap))));
+        let engine = RefCell::new(Engine::new(Box::leak(Box::new(ldap)), true));
         let results = RefCell::new(HashMap::new());
         let _app = BasicApp::build_ui(BasicApp { engine: Some(engine), results: Some(results), ..Default::default() }).expect("Failed to build UI");
         nwg::dispatch_thread_events();

@@ -12,6 +12,8 @@ authz = { path = "../authz", features = ["serial"] }
 winldap = { path = "../winldap" }
 native-windows-gui = "1.0.12"
 native-windows-derive = "1.0.3"
+stretch = "0.3.2"
+csv = "1.1.6"
 
 [dependencies.windows]
 version = "0.32.0"

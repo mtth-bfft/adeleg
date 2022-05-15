@@ -69,6 +69,16 @@ impl PartialEq for DelegationLocation {
     }
 }
 
+impl core::fmt::Display for DelegationLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DelegationLocation::DefaultSecurityDescriptor(class_name) => f.write_fmt(format_args!("All objects of class {}", class_name)),
+            DelegationLocation::Dn(dn) => f.write_str(dn),
+            DelegationLocation::Global => f.write_str("Global"),
+        }
+    }
+}
+
 impl core::hash::Hash for DelegationLocation {
     fn hash<H>(&self, hasher: &mut H) where H: core::hash::Hasher {
         match self {
@@ -373,7 +383,7 @@ pub(crate) fn get_schema_aces(schema: &Schema, forest_sid: &Sid, ignored_trustee
                     continue;
                 }
 
-                // gMSA are hardcoded to not have their password reset, it is not a delegation.
+                // gMSA are hardcoded by design to not have their password reset, it is not a delegation.
                 if class_name == "msDS-GroupManagedServiceAccount" && !ace.grants_access() && ace.access_mask == ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32 {
                     continue;
                 }

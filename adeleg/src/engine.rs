@@ -1,9 +1,9 @@
-use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_WRITE_DAC, ADS_RIGHT_ACCESS_SYSTEM_SECURITY, ADS_RIGHT_DELETE, ADS_RIGHT_DS_WRITE_PROP, ADS_RIGHT_DS_CREATE_CHILD, ADS_RIGHT_DS_DELETE_CHILD, ADS_RIGHT_DS_CONTROL_ACCESS, ADS_RIGHT_DS_SELF};
+use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_WRITE_DAC, ADS_RIGHT_ACCESS_SYSTEM_SECURITY, ADS_RIGHT_DELETE, ADS_RIGHT_DS_WRITE_PROP, ADS_RIGHT_DS_CREATE_CHILD, ADS_RIGHT_DS_DELETE_CHILD, ADS_RIGHT_DS_CONTROL_ACCESS, ADS_RIGHT_DS_SELF, ADS_RIGHT_DS_DELETE_TREE};
 use winldap::connection::LdapConnection;
 use winldap::utils::get_attr_strs;
 use std::collections::{HashMap, HashSet};
 use crate::delegations::{Delegation, DelegationTemplate, DelegationLocation, get_explicit_aces, get_schema_aces};
-use crate::utils::{Domain, get_domains, get_adminsdholder_aces, pretty_print_ace, get_attr_sid, ends_with_case_insensitive, replace_suffix_case_insensitive, capitalize};
+use crate::utils::{Domain, get_domains, get_adminsdholder_aces, get_attr_sid, ends_with_case_insensitive, replace_suffix_case_insensitive, capitalize};
 use crate::schema::Schema;
 use winldap::search::{LdapSearch, LdapEntry};
 use winldap::error::LdapError;
@@ -16,12 +16,13 @@ pub(crate) struct Engine<'a> {
     root_domain: Domain,
     schema: Schema,
     ignored_trustee_sids: HashSet<Sid>,
+    resolve_names: bool,
     pub(crate) templates: HashMap<String, DelegationTemplate>,
     pub(crate) delegations: Vec<Delegation>,
 }
 
 impl<'a> Engine<'a> {
-    pub fn new(ldap: &'a LdapConnection) -> Self {
+    pub fn new(ldap: &'a LdapConnection, resolve_names: bool) -> Self {
         let domains = match get_domains(&ldap) {
             Ok(v) => v,
             Err(e) => {
@@ -82,6 +83,7 @@ impl<'a> Engine<'a> {
             root_domain,
             schema,
             ignored_trustee_sids,
+            resolve_names,
             templates: HashMap::new(),
             delegations: Vec::new(),
         }
@@ -133,8 +135,8 @@ impl<'a> Engine<'a> {
         vec![trustee.to_owned()]
     }
 
-    // Results are indexed by trustee (Sid) -> then location -> (delegations in place, delegations missing, orphan ACEs found)
-    pub fn run(&self) -> HashMap<Sid, HashMap<DelegationLocation, (Vec<Delegation>, Vec<Delegation>, Vec<Ace>)>> {
+    // Results are indexed by trustee (Sid) -> then location -> (orphan ACEs, delegations missing, delegations in place)
+    pub fn run(&self) -> HashMap<Sid, HashMap<DelegationLocation, (Vec<Ace>, Vec<Delegation>, Vec<Delegation>)>> {
         // Derive expected ACEs from these delegations, and index these ACEs by Sid then Location
         let mut delegations_in_input: HashMap<Sid, HashMap<DelegationLocation, Vec<(Delegation, Vec<Ace>)>>> = HashMap::new();
         for delegation in &self.delegations {
@@ -185,10 +187,7 @@ impl<'a> Engine<'a> {
             };
         }
 
-        // Now, compare found ACEs to "expected" delegations, which gives us a list of delegations in place and orphan ACEs.
-        // In the end, add a list of delegations expected but not found, and you have the entire set of results.
-        let mut res: HashMap<Sid, HashMap<DelegationLocation, (Vec<Delegation>, Vec<Delegation>, Vec<Ace>)>> = HashMap::new();
-
+        let mut res: HashMap<Sid, HashMap<DelegationLocation, (Vec<Ace>, Vec<Delegation>, Vec<Delegation>)>> = HashMap::new();
         for (trustee, expected_locations) in &delegations_in_input {
             let locations = res.entry(trustee.to_owned()).or_insert(HashMap::new());
             for (expected_location, _) in expected_locations {
@@ -202,6 +201,8 @@ impl<'a> Engine<'a> {
             }
         }
 
+        // Now, compare found ACEs to "expected" delegations, which gives us a list of delegations in place and orphan ACEs.
+        // In the end, add a list of delegations expected but not found, and you have the entire set of results.
         let empty_default1 = HashMap::new();
         let empty_default2 = HashMap::new();
         let empty_default3 = Vec::new();
@@ -209,7 +210,7 @@ impl<'a> Engine<'a> {
         for (trustee, locations) in &mut res {
             let found_locations = aces_found.get(trustee).unwrap_or(&empty_default1);
             let expected_locations = delegations_in_input.get(trustee).unwrap_or(&empty_default2);
-            for (location, (deleg_found, deleg_missing, ace_orphans)) in locations {
+            for (location, (ace_orphans, deleg_missing, deleg_found)) in locations {
                 let found_aces = found_locations.get(location).unwrap_or(&empty_default3);
                 let expected_delegations  = expected_locations.get(location).unwrap_or(&empty_default4);
                 let mut explained_aces = vec![false; found_aces.len()];
@@ -226,10 +227,9 @@ impl<'a> Engine<'a> {
                 }
 
                 for (index, explained) in explained_aces.iter().enumerate() {
-                    if *explained {
-                        continue;
+                    if !explained {
+                        ace_orphans.push(found_aces[index].clone());
                     }
-                    ace_orphans.push(found_aces[index].clone());
                 }
             }
         }
@@ -241,102 +241,199 @@ impl<'a> Engine<'a> {
         let mut res = vec![];
 
         if (ace.access_mask & ADS_RIGHT_WRITE_DAC.0 as u32) != 0 {
-            res.push("Add/delete delegations".to_owned());
+            res.push(if self.resolve_names {
+                "Add/delete delegations"
+            } else {
+                "WRITE_DAC"
+            }.to_owned());
         }
         if (ace.access_mask & ADS_RIGHT_WRITE_DAC.0 as u32) != 0 {
-            res.push("Change the owner".to_owned());
+            res.push(if self.resolve_names {
+                "Change the owner"
+            } else {
+                "WRITE_DAC"
+            }.to_owned());
+        }
+        if (ace.access_mask & ADS_RIGHT_ACCESS_SYSTEM_SECURITY.0 as u32) != 0 {
+            res.push(if self.resolve_names {
+                "Add/delete auditing rules"
+            } else {
+                "ACCESS_SYSTEM_SECURITY"
+            }.to_owned());
+        }
+        if (ace.access_mask & ADS_RIGHT_DELETE.0 as u32) != 0 {
+            res.push(if self.resolve_names {
+                "Delete"
+            } else {
+                "DELETE"
+            }.to_owned());
+        }
+        if (ace.access_mask & ADS_RIGHT_DS_DELETE_TREE.0 as u32) != 0 {
+            res.push(if self.resolve_names {
+                "Delete along with all children"
+            } else {
+                "DELETE_TREE"
+            }.to_owned());
         }
         if (ace.access_mask & ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32) != 0 {
-            if let Some(guid) = ace.get_object_type() {
-                if let Some(name) = self.schema.control_access_names.get(guid) {
-                    res.push(capitalize(name));
-                } else {
+            if self.resolve_names {
+                if let Some(guid) = ace.get_object_type() {
+                    if let Some(name) = self.schema.control_access_names.get(guid) {
+                        res.push(capitalize(name));
+                    } else {
+                        res.push("Perform all application-specific operations".to_owned());
+                    }
+                }
+                else {
                     res.push("Perform all application-specific operations".to_owned());
                 }
-            }
-            else {
-                res.push("Perform all application-specific operations".to_owned());
+            } else {
+                res.push("CONTROL_ACCESS".to_owned());
             }
         }
         if (ace.access_mask & ADS_RIGHT_DS_SELF.0 as u32) != 0 {
-            if let Some(guid) = ace.get_object_type() {
-                if let Some(name) = self.schema.validated_write_names.get(guid) {
-                    res.push(capitalize(name));
-                } else {
-                    res.push("Perform all validated writes".to_owned());
-                }
-            }
-            else {
-                res.push("Perform all validated writes".to_owned());
-            }
-        }
-        if (ace.access_mask & ADS_RIGHT_ACCESS_SYSTEM_SECURITY.0 as u32) != 0 {
-            res.push("Add/delete auditing rules".to_owned());
-        }
-        if (ace.access_mask & ADS_RIGHT_DELETE.0 as u32) != 0 {
-            res.push("Delete".to_owned());
-        }
-        if (ace.access_mask & ADS_RIGHT_DELETE.0 as u32) != 0 {
-            res.push("Delete along with all children".to_owned());
-        }
-        if (ace.access_mask & ADS_RIGHT_DS_CREATE_CHILD.0 as u32) != 0 {
-            if let Some(guid) = ace.get_object_type() {
-                let mut found = false;
-                for (class_name, class_guid) in &self.schema.class_guids {
-                    if class_guid == guid {
-                        res.push(format!("Create child {} objects", class_name));
-                        found = true;
-                        break;
+            if self.resolve_names {
+                if let Some(guid) = ace.get_object_type() {
+                    if let Some(name) = self.schema.validated_write_names.get(guid) {
+                        res.push(capitalize(name));
+                    } else {
+                        res.push("Perform all validated writes".to_owned());
                     }
                 }
-                if !found {
+                else {
+                    res.push("Perform all validated writes".to_owned());
+                }
+            } else {
+                res.push("SELF".to_owned());
+            }
+        }
+        if (ace.access_mask & ADS_RIGHT_DS_CREATE_CHILD.0 as u32) != 0 {
+            if self.resolve_names {
+                if let Some(guid) = ace.get_object_type() {
+                    let mut found = false;
+                    for (class_name, class_guid) in &self.schema.class_guids {
+                        if class_guid == guid {
+                            res.push(format!("Create child {} objects", class_name));
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        res.push("Create child objects of any type".to_owned());
+                    }
+                }
+                else {
                     res.push("Create child objects of any type".to_owned());
                 }
-            }
-            else {
-                res.push("Create child objects of any type".to_owned());
+            } else {
+                res.push("CREATE_CHILD".to_owned());
             }
         }
         if (ace.access_mask & ADS_RIGHT_DS_DELETE_CHILD.0 as u32) != 0 {
-            if let Some(guid) = ace.get_object_type() {
-                let mut found = false;
-                for (class_name, class_guid) in &self.schema.class_guids {
-                    if class_guid == guid {
-                        res.push(format!("Delete child {} objects", class_name));
-                        found = true;
-                        break;
+            if self.resolve_names {
+                if let Some(guid) = ace.get_object_type() {
+                    let mut found = false;
+                    for (class_name, class_guid) in &self.schema.class_guids {
+                        if class_guid == guid {
+                            res.push(format!("Delete child {} objects", class_name));
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        res.push("Delete child objects of any type".to_owned());
                     }
                 }
-                if !found {
+                else {
                     res.push("Delete child objects of any type".to_owned());
                 }
-            }
-            else {
-                res.push("Delete child objects of any type".to_owned());
+            } else {
+                res.push("DELETE_CHILD".to_owned());
             }
         }
         if (ace.access_mask & ADS_RIGHT_DS_WRITE_PROP.0 as u32) != 0 {
-            if let Some(guid) = ace.get_object_type() {
-                if let Some(name) = self.schema.attribute_guids.get(guid) {
-                    res.push(format!("Write attribute {}", name));
-                }
-                else if let Some(name) = self.schema.property_set_names.get(guid) {
-                    res.push(format!("Write attributes of category {}", name));
-                }
-                else {
+            if self.resolve_names {
+                if let Some(guid) = ace.get_object_type() {
+                    if let Some(name) = self.schema.attribute_guids.get(guid) {
+                        res.push(format!("Write attribute {}", name));
+                    }
+                    else if let Some(name) = self.schema.property_set_names.get(guid) {
+                        res.push(format!("Write attributes of category {}", name));
+                    }
+                    else {
+                        res.push("Write all properties".to_owned());
+                    }
+                } else {
                     res.push("Write all properties".to_owned());
                 }
             } else {
-                res.push("Write all properties".to_owned());
+                res.push("WRITE_PROP".to_owned());
             }
         }
-        
+
         let mut res = res.join(", ");
-        if ace.get_container_inherit() {
+        if self.resolve_names {
+            if ace.get_container_inherit() {
+                let mut found = false;
+                if let Some(guid) = ace.get_inherited_object_type() {
+                    for (class_name, class_guid) in &self.schema.class_guids {
+                        if class_guid == guid {
+                            res.push_str(&format!(" on all {} child objects", class_name));
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if !found {
+                    res.push_str(" on all child objects");
+                }
+    
+                if !ace.get_inherit_only() {
+                    res.push_str(" and the container itself");
+                }
+            }
+        } else {
+            if let Some(guid) = ace.get_inherited_object_type() {
+                res.push_str(&format!(" OBJECT_GUID={}", guid));
+                if (ace.access_mask & (ADS_RIGHT_DS_CREATE_CHILD.0 | ADS_RIGHT_DS_DELETE_CHILD.0) as u32) != 0 {
+                    for (class_name, class_guid) in &self.schema.class_guids {
+                        if class_guid == guid {
+                            res.push_str(&format!("({})", class_name));
+                            break;
+                        }
+                    }
+                }
+                if (ace.access_mask & (ADS_RIGHT_DS_WRITE_PROP.0 as u32)) != 0 {
+                    for (attr_guid, attr_name) in &self.schema.attribute_guids {
+                        if attr_guid == guid {
+                            res.push_str(&format!("({})", attr_name));
+                            break;
+                        }
+                    }
+                }
+                if (ace.access_mask & (ADS_RIGHT_DS_SELF.0 as u32)) != 0 {
+                    for (ctrl_guid, ctrl_name) in &self.schema.validated_write_names {
+                        if ctrl_guid == guid {
+                            res.push_str(&format!("({})", ctrl_name));
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some(guid) = ace.get_inherited_object_type() {
+                res.push_str(&format!(" INHERIT_OBJECT_TYPE={}", guid));
+                for (class_name, class_guid) in &self.schema.class_guids {
+                    if class_guid == guid {
+                        res.push_str(&format!("({})", class_name));
+                        break;
+                    }
+                }
+            }
+            if ace.get_container_inherit() {
+                res.push_str(" [CONTAINER_INHERIT]");
+            }
             if ace.get_inherit_only() {
-                res.push_str(" on all child objects");
-            } else {
-                res.push_str(" on all child objects and the container itself");
+                res.push_str(" [INHERIT_ONLY]");
             }
         }
         res
