@@ -349,6 +349,7 @@
     {
         "name": "Replicate as a read-only domain controller",
         "description": "Replicate a filtered set of attributes. This is a built-in delegation which you should not have to use",
+        "resource": "global",
         "rights": [
             {
                 "access_mask": 256,
@@ -424,8 +425,11 @@
         ]
     },
     {
-        "name": "Create empty GPOs",
+        "name": "Create empty GPOs in a domain",
         "description": "Create new group policy objects (you may also want to delegate the right to link these GPOs on some organizational unit(s))",
+        "resource": {
+            "any_instance_of": ["domain"]
+        },
         "rights": [
             {
                 "access_mask": 1,

@@ -1,24 +1,12 @@
 use authz::{Ace, AceType, Guid};
-use winldap::utils::get_attr_str;
-use std::collections::{HashSet, HashMap};
+use std::collections::HashMap;
 use authz::Sid;
 use serde::{Serialize, Deserialize};
-use crate::{utils::{Domain, get_attr_sd, get_domain_sid, replace_suffix_case_insensitive, ends_with_case_insensitive, resolve_samaccountname_to_sid, get_attr_sid}, schema::Schema};
+use crate::{utils::{Domain, replace_suffix_case_insensitive, ends_with_case_insensitive, resolve_samaccountname_to_sid}, schema::Schema};
 use winldap::connection::LdapConnection;
-use winldap::utils::get_attr_strs;
-use winldap::error::LdapError;
-use winldap::search::LdapSearch;
-use windows::Win32::{Networking::{Ldap::{LDAP_SCOPE_SUBTREE, LDAP_SERVER_SD_FLAGS_OID}, ActiveDirectory::{ADS_RIGHT_READ_CONTROL, ADS_RIGHT_ACTRL_DS_LIST, ADS_RIGHT_DS_LIST_OBJECT, ADS_RIGHT_DS_READ_PROP, ADS_RIGHT_DELETE, ADS_RIGHT_DS_DELETE_TREE, ADS_RIGHT_DS_DELETE_CHILD}}, Security::{CONTAINER_INHERIT_ACE, INHERIT_ONLY_ACE, OBJECT_INHERIT_ACE, ACE_OBJECT_TYPE_PRESENT}};
-use winldap::control::{LdapControl, BerVal, BerEncodable};
-use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION};
+use windows::Win32::Security::{CONTAINER_INHERIT_ACE, INHERIT_ONLY_ACE, OBJECT_INHERIT_ACE, ACE_OBJECT_TYPE_PRESENT};
 use windows::Win32::Security::NO_PROPAGATE_INHERIT_ACE;
 use windows::Win32::Security::ACE_INHERITED_OBJECT_TYPE_PRESENT;
-use windows::Win32::Networking::ActiveDirectory::ADS_RIGHT_DS_CONTROL_ACCESS;
-
-pub const IGNORED_ACCESS_RIGHTS: u32 = (ADS_RIGHT_READ_CONTROL.0 |
-    ADS_RIGHT_ACTRL_DS_LIST.0 |
-    ADS_RIGHT_DS_LIST_OBJECT.0 |
-    ADS_RIGHT_DS_READ_PROP.0) as u32;
 
 fn is_default<T: Default + PartialEq>(t: &T) -> bool {
     t == &T::default()
@@ -39,7 +27,7 @@ pub enum DelegationTrustee {
     //TODO: UPN(String),
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialOrd)]
 #[serde(rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
 pub enum DelegationLocation {
@@ -65,6 +53,21 @@ impl PartialEq for DelegationLocation {
             (DelegationLocation::Dn(a), DelegationLocation::Dn(b)) => a.to_lowercase() == b.to_lowercase(),
             (DelegationLocation::Global, DelegationLocation::Global) => true,
             _ => false,
+        }
+    }
+}
+
+impl Ord for DelegationLocation {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match (self, other) {
+            (DelegationLocation::Global, DelegationLocation::Global) => std::cmp::Ordering::Equal,
+            (DelegationLocation::Global, _) => std::cmp::Ordering::Less,
+            (_, DelegationLocation::Global) => std::cmp::Ordering::Greater,
+            (DelegationLocation::DefaultSecurityDescriptor(c1), DelegationLocation::DefaultSecurityDescriptor(c2)) => c1.cmp(c2),
+            (DelegationLocation::DefaultSecurityDescriptor(_), _) => std::cmp::Ordering::Less,
+            (_, DelegationLocation::DefaultSecurityDescriptor(_)) => std::cmp::Ordering::Greater,
+            (DelegationLocation::Dn(d1), DelegationLocation::Dn(d2)) => 
+                d1.split(',').rev().collect::<Vec<&str>>().cmp(&d2.split(',').rev().collect::<Vec<&str>>()),
         }
     }
 }
@@ -101,10 +104,12 @@ impl core::hash::Hash for DelegationLocation {
 #[serde(rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
 pub enum TemplateResourceFilter {
-    // An unspecified location only restricted to some object class(es)
-    AnyInstanceOf(Vec<String>),
+    // This template is global, it applies to the entire forest
+    Global,
     // In the schema partition, in the defaultSecurityDescriptor attribute of a given class name
     DefaultSecurityDescriptor(String),
+    // An unspecified location only restricted to some object class(es)
+    AnyInstanceOf(Vec<String>),
     // Hardcoded relative DN in the domain partition (use with parsimony)
     DomainDn(String),
 }
@@ -367,203 +372,4 @@ impl DelegationTemplate {
         }
         Ok(res)
     }
-}
-
-pub(crate) fn get_schema_aces(schema: &Schema, forest_sid: &Sid, ignored_trustee_sids: &HashSet<Sid>) -> HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>> {
-    let mut res = HashMap::new();
-    let default_sds = schema.class_default_sd.get(forest_sid).unwrap();
-    for (class_name, default_sd) in default_sds {
-        if let Some(default_acl) = &default_sd.dacl {
-            for ace in &default_acl.aces {
-                if !is_ace_interesting(ace,
-                        false,
-                        &[],
-                        &schema,
-                        ignored_trustee_sids) {
-                    continue;
-                }
-
-                // gMSA are hardcoded by design to not have their password reset, it is not a delegation.
-                if class_name == "msDS-GroupManagedServiceAccount" && !ace.grants_access() && ace.access_mask == ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32 {
-                    continue;
-                }
-
-                res.entry(ace.trustee.clone()).or_insert(HashMap::new())
-                    .entry(DelegationLocation::DefaultSecurityDescriptor(class_name.to_owned()))
-                    .or_insert(vec![])
-                    .push(ace.to_owned());
-            }
-        }
-    }
-    res
-}
-
-pub(crate) fn get_explicit_aces(conn: &LdapConnection, naming_context: &str, forest_sid: &Sid, schema: &Schema, adminsdholder_aces: &[Ace], ignored_trustee_sids: &HashSet<Sid>) -> Result<HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>>, LdapError> {
-    let domain_sid = get_domain_sid(conn, naming_context);
-    let default_sd = schema.class_default_sd.get(domain_sid.as_ref().unwrap_or(forest_sid)).expect("domain SID without defaultSecurityDescriptors");
-
-    let mut sd_control_val = BerVal::new();
-    sd_control_val.append(BerEncodable::Sequence(vec![BerEncodable::Integer((OWNER_SECURITY_INFORMATION.0 | DACL_SECURITY_INFORMATION.0).into())]));
-    let sd_control = LdapControl::new(
-        LDAP_SERVER_SD_FLAGS_OID,
-        &sd_control_val,
-        true)?;
-    let search = LdapSearch::new(&conn, Some(naming_context), LDAP_SCOPE_SUBTREE,
-                             Some("(objectClass=*)"),
-                             Some(&[
-        "nTSecurityDescriptor",
-        "objectClass",
-        "objectSID",
-        "adminCount",
-    ]), &[&sd_control]);
-
-    let mut res = HashMap::new();
-    // Keep track of objectSID -> DN while scanning objects, for those who have an objectSID
-    let mut object_sids = HashMap::new();
-    for entry in search {
-        let entry = entry?;
-        let sd = match get_attr_sd(&[&entry], &entry.dn, "ntsecuritydescriptor") {
-            Ok(sd) => sd,
-            Err(e) => {
-                eprintln!(" [!] Unable to read security descriptor, {} (results will be incomplete)", e);
-                continue;
-            },
-        };
-        let admincount = get_attr_str(&[&entry], &entry.dn, "admincount").unwrap_or("0".to_owned()) != "0";
-        if let Ok(object_sid) = get_attr_sid(&[&entry], &entry.dn, "objectsid") {
-            object_sids.insert(object_sid, entry.dn.to_owned());
-        };
-        let dacl = sd.dacl.expect("assertion failed: object without a DACL");
-
-        // Check if the DACL is in canonical order
-        if let Err(ace) = dacl.check_canonicality() {
-            eprintln!(" [!] ACL of {} is not in canonical order, fix ACE: {:?}", entry.dn, ace);
-        }
-
-        let classes = get_attr_strs(&[&entry], &entry.dn, "objectclass")?;
-        let most_specific_class = &classes[classes.len() - 1];
-        let default_aces: &[Ace] = default_sd.get(most_specific_class)
-            .and_then(|sd| sd.dacl.as_ref().map(|acl| &acl.aces[..]))
-            .unwrap_or(&[]);
-
-        // Derive ACEs from the defaultSecurityDescriptor of the object's class, and see if the ACE is a default.
-        // These ACEs are not simply memcpy()ed, they are treated as if the object had inherited them from the schema.
-        let owner = sd.owner.as_ref().expect("Object security descriptor without an owner");
-        let object_classes = get_attr_strs(&[&entry], &entry.dn, "objectclass")?;
-        let most_precise_class = object_classes.last().expect("Object without any objectClass");
-        let most_precise_class = schema.class_guids.get(most_precise_class).expect("Object with an unknown objectClass");
-        let default_aces = get_ace_derived_by_inheritance(default_aces, &owner, &most_precise_class, true);
-
-        let here = DelegationLocation::Dn(entry.dn.to_owned());
-        for ace in &dacl.aces {
-            if !is_ace_interesting(ace,
-                    admincount,
-                    &adminsdholder_aces[..],
-                    &schema,
-                    &ignored_trustee_sids) {
-                continue;
-            }
-            if default_aces.contains(&ace) {
-                continue;
-            }
-            res.entry(ace.trustee.clone()).or_insert(HashMap::new())
-                .entry(here.clone()).or_insert(vec![])
-                .push(ace.to_owned());
-        }
-    }
-
-    // Remove any ACE whose trustee is a parent object (parents control their child containers,
-    // e.g. computers control their BitLocker recovery information, TPM information, Hyper-V virtual machine objects, etc.)
-    for (trustee, delegations) in res.iter_mut() {
-        if let Some(trustee_dn) = object_sids.get(trustee) {
-            for (location, aces) in delegations.iter_mut() {
-                if let DelegationLocation::Dn(dn) = location {
-                    if ends_with_case_insensitive(dn, trustee_dn) {
-                        aces.clear();
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(res)
-}
-
-pub fn is_ace_interesting(ace: &Ace, admincount: bool, adminsdholder_aces: &[Ace], schema: &Schema, ignored_trustee_sids: &HashSet<Sid>) -> bool {
-    let ignored_control_accesses = [
-        "apply group policy", // applying a group policy does not mean we control it
-        "send to", // sending email to people does not mean we control them
-        "change password", // changing password requires knowing the current password, and if you know the password you control the user
-        "query self quota", // if an attacker can impersonate a user, querying their quota is the least of their worries
-        "open address list", // listing address books is not a control path
-        "allow a dc to create a clone of itself", // if an attacker can impersonate a DC, cloning to a new DC is the least of your worries
-        "enumerate entire sam domain", // user enumeration is allowed to everyone by default
-    ];
-    let everyone = Sid::try_from("S-1-1-0").expect("invalid SID");
-
-    if ace.is_inherited() {
-        return false; // ignore inherited ACEs
-    }
-    let problematic_rights = ace.access_mask & !(IGNORED_ACCESS_RIGHTS);
-    if problematic_rights == 0 {
-        return false; // ignore read-only ACEs which cannot be abused (e.g. to read LAPS passwords)
-    }
-    if ace.trustee == everyone && !ace.grants_access() &&
-            (ace.access_mask & !(ADS_RIGHT_DELETE.0 as u32 | ADS_RIGHT_DS_DELETE_CHILD.0 as u32 | ADS_RIGHT_DS_DELETE_TREE.0 as u32)) == 0 {
-        return false; // ignore "delete protection" ACEs
-    }
-    if admincount && adminsdholder_aces.contains(&ace) {
-        return false; // ignore ACEs from SDProp on objects marked with adminCount=1 (note: ACEs from
-        // AdminSDHolder are not inherited, just copied, so comparison here is a simple fast hash
-        // lookup.)
-    }
-    if ignored_trustee_sids.contains(&ace.trustee) {
-        return false; // these principals are already in control of the resource (either because they
-        // are the resource itself, or because they are highly privileged over the entire forest)
-    }
-    // Some control accesses do not grant any right on the resource itself, they are not a delegation
-    if problematic_rights == ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32 {
-        if let Some(guid) = ace.get_object_type() {
-            if let Some(name) = schema.control_access_names.get(guid) {
-                if ignored_control_accesses.contains(&name.to_lowercase().as_str()) {
-                    return false;
-                }
-            }
-        }
-    }
-
-    true
-}
-
-fn get_ace_derived_by_inheritance(parent_aces: &[Ace], child_owner: &Sid, child_object_type: &Guid, force_inheritance: bool) -> Vec<Ace> {
-    let mut res = vec![];
-    for parent_ace in parent_aces {
-        if !force_inheritance && (parent_ace.flags & CONTAINER_INHERIT_ACE.0 as u8) == 0 {
-            continue;
-        }
-        if let Some(guid) = parent_ace.get_inherited_object_type() {
-            if guid != child_object_type && (parent_ace.flags & NO_PROPAGATE_INHERIT_ACE.0 as u8) != 0 {
-                continue;
-            }
-        }
-        // Creator Owner SID gets replaced by the current owner
-        let trustee = if parent_ace.trustee == Sid::try_from("S-1-3-0").unwrap() {
-            child_owner
-        } else {
-            &parent_ace.trustee
-        }.to_owned();
-
-        let mut flags = parent_ace.flags;
-        if (parent_ace.flags & NO_PROPAGATE_INHERIT_ACE.0 as u8) != 0 {
-            flags &= !(CONTAINER_INHERIT_ACE.0 as u8 | OBJECT_INHERIT_ACE.0 as u8);
-        }
-
-        res.push(Ace {
-            trustee,
-            access_mask: parent_ace.access_mask,
-            flags,
-            type_specific: parent_ace.type_specific.clone(),
-        })
-    }
-    res
 }

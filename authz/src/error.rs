@@ -1,7 +1,7 @@
 use core::fmt::Display;
 use windows::core::alloc::fmt::Formatter;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AuthzError {
     InvalidSecurityDescriptor(Vec<u8>),
     InvalidStringSecurityDescriptor { str: String, code: u32 },

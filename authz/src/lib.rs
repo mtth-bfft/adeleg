@@ -13,3 +13,4 @@ pub use acl::Acl;
 pub use ace::{Ace, AceType};
 pub use sid::Sid;
 pub use guid::Guid;
+pub use error::AuthzError;

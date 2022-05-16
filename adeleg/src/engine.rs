@@ -1,14 +1,32 @@
-use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_WRITE_DAC, ADS_RIGHT_ACCESS_SYSTEM_SECURITY, ADS_RIGHT_DELETE, ADS_RIGHT_DS_WRITE_PROP, ADS_RIGHT_DS_CREATE_CHILD, ADS_RIGHT_DS_DELETE_CHILD, ADS_RIGHT_DS_CONTROL_ACCESS, ADS_RIGHT_DS_SELF, ADS_RIGHT_DS_DELETE_TREE};
-use winldap::connection::LdapConnection;
-use winldap::utils::get_attr_strs;
 use std::collections::{HashMap, HashSet};
-use crate::delegations::{Delegation, DelegationTemplate, DelegationLocation, get_explicit_aces, get_schema_aces};
-use crate::utils::{Domain, get_domains, get_adminsdholder_aces, get_attr_sid, ends_with_case_insensitive, replace_suffix_case_insensitive, capitalize};
-use crate::schema::Schema;
+use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_WRITE_DAC, ADS_RIGHT_READ_CONTROL, ADS_RIGHT_DS_LIST_OBJECT, ADS_RIGHT_ACCESS_SYSTEM_SECURITY, ADS_RIGHT_DELETE, ADS_RIGHT_DS_WRITE_PROP, ADS_RIGHT_DS_CREATE_CHILD, ADS_RIGHT_DS_DELETE_CHILD, ADS_RIGHT_DS_CONTROL_ACCESS, ADS_RIGHT_DS_SELF, ADS_RIGHT_DS_DELETE_TREE, ADS_RIGHT_ACTRL_DS_LIST, ADS_RIGHT_DS_READ_PROP};
+use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION};
+use windows::Win32::Networking::Ldap::{LDAP_SCOPE_BASE, LDAP_SCOPE_SUBTREE, LDAP_SERVER_SD_FLAGS_OID};
+use authz::{SecurityDescriptor, Sid, Ace};
+use winldap::connection::LdapConnection;
+use winldap::utils::{get_attr_strs, get_attr_str};
 use winldap::search::{LdapSearch, LdapEntry};
 use winldap::error::LdapError;
-use windows::Win32::Networking::Ldap::{LDAP_SCOPE_BASE, LDAP_SCOPE_SUBTREE};
-use authz::{Sid, Ace, Guid};
+use winldap::control::{BerVal, BerEncodable, LdapControl};
+use crate::delegations::{Delegation, DelegationTemplate, DelegationLocation};
+use crate::error::AdelegError;
+use crate::utils::{Domain, find_ace_positions, get_ace_derived_by_inheritance, get_domains, get_attr_sid, get_attr_sd, ends_with_case_insensitive, capitalize};
+use crate::schema::Schema;
+
+pub const IGNORED_ACCESS_RIGHTS: u32 = (ADS_RIGHT_READ_CONTROL.0 |
+    ADS_RIGHT_ACTRL_DS_LIST.0 |
+    ADS_RIGHT_DS_LIST_OBJECT.0 |
+    ADS_RIGHT_DS_READ_PROP.0) as u32;
+
+pub const IGNORED_CONTROL_ACCESSES: &[&str] = &[
+    "apply group policy", // applying a group policy does not mean we control it
+    "send to", // sending email to people does not mean we control them
+    "change password", // changing password requires knowing the current password, and if you know the password you control the user
+    "query self quota", // if an attacker can impersonate a user, querying their quota is the least of their worries
+    "open address list", // listing address books is not a control path
+    "allow a dc to create a clone of itself", // if an attacker can impersonate a DC, cloning to a new DC is the least of your worries
+    "enumerate entire sam domain", // user enumeration is allowed to everyone by default
+];
 
 pub(crate) struct Engine<'a> {
     ldap: &'a LdapConnection,
@@ -16,9 +34,18 @@ pub(crate) struct Engine<'a> {
     root_domain: Domain,
     schema: Schema,
     ignored_trustee_sids: HashSet<Sid>,
+    pub(crate) naming_contexts: Vec<String>,
     resolve_names: bool,
     pub(crate) templates: HashMap<String, DelegationTemplate>,
     pub(crate) delegations: Vec<Delegation>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AdelegResult {
+    pub(crate) non_canonical_ace: Option<Ace>,
+    pub(crate) orphan_aces: Vec<Ace>,
+    pub(crate) delegations_found: Vec<(Delegation, Sid, Vec<Ace>)>,
+    pub(crate) delegations_missing: Vec<(Delegation, Sid)>,
 }
 
 impl<'a> Engine<'a> {
@@ -48,8 +75,7 @@ impl<'a> Engine<'a> {
             }
         };
     
-        let domain_sids: Vec<Sid> = domains.iter().map(|d| d.sid.clone()).collect();
-        let schema = match Schema::query(&ldap, &domain_sids[..], &root_domain.sid) {
+        let schema = match Schema::query(&ldap) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Unable to fetch required information from schema: {}", e);
@@ -82,6 +108,7 @@ impl<'a> Engine<'a> {
             domains,
             root_domain,
             schema,
+            naming_contexts: ldap.get_naming_contexts().to_vec(),
             ignored_trustee_sids,
             resolve_names,
             templates: HashMap::new(),
@@ -119,122 +146,298 @@ impl<'a> Engine<'a> {
         Ok(())
     }
 
-    pub fn split_trustee_components(&self, trustee: &str) -> Vec<String> {
-        if trustee.contains(",") {
+    // Result is indexed by (domain SID) -> (class name) -> (list of ACEs, with a trustee in each)
+    fn get_schema_aces(&self) -> Result<HashMap<Sid, HashMap<DelegationLocation, Result<AdelegResult, AdelegError>>>, LdapError> {
+        let mut res: HashMap<Sid, HashMap<DelegationLocation, Result<AdelegResult, AdelegError>>> = HashMap::new();
+
+        let search = LdapSearch::new(&self.ldap, Some(self.ldap.get_schema_naming_context()), LDAP_SCOPE_SUBTREE,
+            Some("(objectClass=classSchema)"),
+            Some(&[
+                "lDAPDisplayName",
+                "defaultSecurityDescriptor"
+            ]), &[]);
+
+        for entry in search {
+            let entry = entry?;
+            let class_name = get_attr_str(&[&entry], &entry.dn, "ldapdisplayname")?;
             for domain in &self.domains {
-                if ends_with_case_insensitive(&trustee, &domain.distinguished_name) {
-                    let mut parts = vec![domain.distinguished_name.clone()];
-                    let trustee = replace_suffix_case_insensitive(&trustee, &domain.distinguished_name, "");
-                    for part in trustee.trim_matches(',').split(',').rev() {
-                        parts.push(part.to_owned());
+                let res = res.entry(domain.sid.clone()).or_default().entry(DelegationLocation::DefaultSecurityDescriptor(class_name.clone()));
+                let sddl = match get_attr_str(&[&entry], &entry.dn, "defaultsecuritydescriptor") {
+                    Ok(sddl) => sddl,
+                    // Not all classes have a default SDDL attribute (if they are not used as the most specialized class of any object)
+                    Err(LdapError::RequiredAttributeMissing { .. }) => continue,
+                    Err(e) => {
+                        res.or_insert(Err(AdelegError::LdapQueryFailed(e)));
+                        continue;
+                    },
+                };
+                let sd = match SecurityDescriptor::from_str(&sddl, &domain.sid, &self.root_domain.sid) {
+                    Ok(sd) => sd,
+                    Err(e) => {
+                        res.or_insert(Err(AdelegError::UnableToParseDefaultSecurityDescriptor(e)));
+                        continue;
+                    },
+                };
+                let dacl = match sd.dacl {
+                    Some(acl) => acl,
+                    None => continue,
+                };
+                let mut entry = AdelegResult {
+                    orphan_aces: vec![],
+                    non_canonical_ace: dacl.check_canonicality().err(),
+                    delegations_found: vec![],
+                    delegations_missing: vec![],
+                };
+                for ace in dacl.aces {
+                    if !self.is_ace_interesting(&ace, false, &[]) {
+                        continue;
                     }
-                    return parts;
+
+                    // gMSA are hardcoded by design to not have their password reset, it is not a delegation.
+                    if class_name == "msDS-GroupManagedServiceAccount" && !ace.grants_access() && ace.access_mask == ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32 {
+                        continue;
+                    }
+
+                    entry.orphan_aces.push(ace);
+                }
+                if !entry.orphan_aces.is_empty() {
+                    res.or_insert(Ok(entry));
                 }
             }
         }
-        vec![trustee.to_owned()]
+        Ok(res)
     }
 
-    // Results are indexed by trustee (Sid) -> then location -> (orphan ACEs, delegations missing, delegations in place)
-    pub fn run(&self) -> HashMap<Sid, HashMap<DelegationLocation, (Vec<Ace>, Vec<Delegation>, Vec<Delegation>)>> {
+    fn get_adminsdholder_aces(&self, naming_context: &str) -> Result<Vec<Ace>, LdapError> {
+        let nc_holding_object = &self.domains.iter()
+            .find(|dom| dom.distinguished_name == naming_context)
+            .unwrap_or(&self.root_domain)
+            .distinguished_name;
+        let dn = format!("CN=AdminSDHolder,CN=System,{}", nc_holding_object);
+        let mut sd_control_val = BerVal::new();
+        sd_control_val.append(BerEncodable::Sequence(vec![BerEncodable::Integer((DACL_SECURITY_INFORMATION.0).into())]));
+            let sd_control = LdapControl::new(
+            LDAP_SERVER_SD_FLAGS_OID,
+            &sd_control_val,
+            true)?;
+        let search = LdapSearch::new(self.ldap, Some(&dn),LDAP_SCOPE_BASE,
+        Some("(objectClass=*)"),
+        Some(&["nTSecurityDescriptor"]), &[&sd_control]);
+        let res = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
+        let sd = get_attr_sd(&res[..],  &dn, "ntsecuritydescriptor")?;
+        Ok(sd.dacl.map(|d| d.aces).unwrap_or(vec![]))
+    }
+
+    fn get_explicit_aces(&self, naming_context: &str, schema_aces: &HashMap<DelegationLocation, Result<AdelegResult, AdelegError>>) -> Result<HashMap<DelegationLocation, Result<AdelegResult, AdelegError>>, LdapError> {
+        let adminsdholder_aces = self.get_adminsdholder_aces(&naming_context)?;
+    
+        let mut sd_control_val = BerVal::new();
+        sd_control_val.append(BerEncodable::Sequence(vec![BerEncodable::Integer((OWNER_SECURITY_INFORMATION.0 | DACL_SECURITY_INFORMATION.0).into())]));
+        let sd_control = LdapControl::new(
+            LDAP_SERVER_SD_FLAGS_OID,
+            &sd_control_val,
+            true)?;
+        let search = LdapSearch::new(self.ldap, Some(naming_context), LDAP_SCOPE_SUBTREE,
+                                 Some("(objectClass=*)"),
+                                 Some(&[
+            "nTSecurityDescriptor",
+            "objectClass",
+            "objectSID",
+            "adminCount",
+        ]), &[&sd_control]);
+    
+        let mut res: HashMap<DelegationLocation, Result<AdelegResult, AdelegError>> = HashMap::new();
+    
+        // Keep track of objectSID -> DN while scanning objects, to ignore delegations to a SID on objects under a container with that SID
+        let mut object_sids = HashMap::new();
+        for entry in search {
+            let entry = entry?;
+            if let Ok(object_sid) = get_attr_sid(&[&entry], &entry.dn, "objectsid") {
+                object_sids.insert(object_sid, entry.dn.to_owned());
+            };
+            let res = res.entry(DelegationLocation::Dn(entry.dn.clone()));
+            let sd = match get_attr_sd(&[&entry], &entry.dn, "ntsecuritydescriptor") {
+                Ok(sd) => sd,
+                Err(e) => {
+                    res.or_insert(Err(AdelegError::LdapQueryFailed(e)));
+                    continue;
+                },
+            };
+            let admincount = get_attr_str(&[&entry], &entry.dn, "admincount")
+                .unwrap_or("0".to_owned()) != "0";
+            let dacl = sd.dacl.expect("assertion failed: object without a DACL!?");
+
+            let mut record = AdelegResult {
+                non_canonical_ace: dacl.check_canonicality().err(),
+                orphan_aces: vec![],
+                delegations_found: vec![],
+                delegations_missing: vec![],
+            };
+
+            let most_specific_class = get_attr_strs(&[&entry], &entry.dn, "objectclass")?
+                .pop()
+                .expect("assertion failed: object without an objectClass!?");
+            let default_aces = match schema_aces.get(&DelegationLocation::DefaultSecurityDescriptor(most_specific_class.clone())) {
+                Some(Ok(AdelegResult { orphan_aces, ..  })) => &orphan_aces[..],
+                _ => &[]
+            };
+            // Derive ACEs from the defaultSecurityDescriptor of the object's class, and see if the ACE is a default.
+            // These ACEs are not simply memcpy()ed, they are treated as if the object had inherited them from the schema.
+            let owner = sd.owner.as_ref().expect("assertion failed: object without an owner!?");
+            let object_type = self.schema.class_guids.get(&most_specific_class).expect("assertion failed: invalid objectClass?!");
+            let default_aces = get_ace_derived_by_inheritance(default_aces, &owner, object_type, true);
+
+            for ace in dacl.aces {
+                // Do not look for the exact list of default ACEs from the schema in the exact same order:
+                // if some ACEs have been removed, we still want to treat the others as implicit ones from the schema.
+                if default_aces.contains(&ace) {
+                    continue;
+                }
+                if !self.is_ace_interesting(&ace, admincount, &adminsdholder_aces[..]) {
+                    continue;
+                }
+                record.orphan_aces.push(ace);
+            }
+            res.or_insert(Ok(record));
+        }
+    
+        // Remove any ACE whose trustee is a parent object (parents control their child containers anyway,
+        // e.g. computers control their BitLocker recovery information, TPM information, Hyper-V virtual machine objects, etc.)
+        for (location, res) in res.iter_mut() {
+            if let DelegationLocation::Dn(dn) = location {
+                if let Ok(res) = res {
+                    res.orphan_aces.retain(|ace| {
+                        if let Some(trustee_dn) = object_sids.get(&ace.trustee) {
+                            if ends_with_case_insensitive(dn, trustee_dn) {
+                                return false;
+                            }
+                        }
+                        true
+                    });
+                }
+            }
+        }
+
+        // Only keep nodes for which we have something to say
+        res.retain(|_, res| {
+            if let Ok(res) = res {
+                if res.non_canonical_ace.is_none() && res.orphan_aces.is_empty() && res.delegations_missing.is_empty() && res.delegations_found.is_empty() {
+                    return false;
+                }
+            }
+            true
+        });
+
+        Ok(res)
+    }
+
+    pub fn is_ace_interesting(&self, ace: &Ace, admincount: bool, adminsdholder_aces: &[Ace]) -> bool {
+        let everyone = Sid::try_from("S-1-1-0").expect("invalid SID");
+
+        if ace.is_inherited() {
+            return false; // ignore inherited ACEs
+        }
+        let problematic_rights = ace.access_mask & !(IGNORED_ACCESS_RIGHTS);
+        if problematic_rights == 0 {
+            return false; // ignore read-only ACEs which cannot be abused (e.g. to read LAPS passwords)
+        }
+        if ace.trustee == everyone && !ace.grants_access() &&
+                (ace.access_mask & !(ADS_RIGHT_DELETE.0 as u32 | ADS_RIGHT_DS_DELETE_CHILD.0 as u32 | ADS_RIGHT_DS_DELETE_TREE.0 as u32)) == 0 {
+            return false; // ignore "delete protection" ACEs
+        }
+        if admincount && adminsdholder_aces.contains(&ace) {
+            return false; // ignore ACEs from SDProp on objects marked with adminCount=1 (note: ACEs from
+            // AdminSDHolder are not inherited, just copied, so comparison here is a simple fast hash
+            // lookup.)
+        }
+        if self.ignored_trustee_sids.contains(&ace.trustee) {
+            return false; // these principals are already in control of the resource (either because they
+            // are the resource itself, or because they are highly privileged over the entire forest)
+        }
+        // Some control accesses do not grant any right on the resource itself, they are not a delegation
+        if problematic_rights == ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32 {
+            if let Some(guid) = ace.get_object_type() {
+                if let Some(name) = self.schema.control_access_names.get(guid) {
+                    if IGNORED_CONTROL_ACCESSES.contains(&name.to_lowercase().as_str()) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        true
+    }
+
+
+    // Results are indexed by location (DN, class name) -> (orphan ACEs, delegations missing, delegations in place)
+    pub fn run(&self) -> Result<HashMap<DelegationLocation, Result<AdelegResult, AdelegError>>, LdapError> {
         // Derive expected ACEs from these delegations, and index these ACEs by Sid then Location
-        let mut delegations_in_input: HashMap<Sid, HashMap<DelegationLocation, Vec<(Delegation, Vec<Ace>)>>> = HashMap::new();
+        let mut expected_delegations: HashMap<Sid, HashMap<DelegationLocation, Vec<(Delegation, Vec<Ace>)>>> = HashMap::new();
         for delegation in &self.delegations {
             let expected_aces = match delegation.derive_aces(&self.ldap, &self.root_domain, &self.domains) {
                 Ok(h) => h,
                 Err(e) => {
                     eprintln!(" [!] Unable to compute expected ACEs from delegation: {}", e);
                     std::process::exit(1);
+                    // TODO: move this possibly-error-generating computation (only unresolved samaccountnames, for now)
+                    // to the moment a delegation is added, so that the computation is only done once, and the error context
+                    // is clearer (JSON file path, line, etc.)
                 }
             };
             for (location, aces) in expected_aces {
                 let sid = aces.get(0).expect("delegations should have at least one ACE").trustee.clone();
-                delegations_in_input.entry(sid).or_insert(HashMap::new())
+                expected_delegations.entry(sid).or_insert(HashMap::new())
                     .entry(location).or_insert(vec![])
                     .push((delegation.clone(), aces));
             }
         }
 
         // Fetch all meaningful ACEs
-        let mut aces_found: HashMap<Sid, HashMap<DelegationLocation, Vec<Ace>>> = get_schema_aces(&self.schema, &self.root_domain.sid, &self.ignored_trustee_sids);
+        let schema_aces = self.get_schema_aces()?;
+        let mut res = schema_aces.get(&self.root_domain.sid).cloned().unwrap_or_default();
         let mut naming_contexts = Vec::from(self.ldap.get_naming_contexts());
         naming_contexts.sort();
 
         for naming_context in naming_contexts {
-            let adminsdholder_aces = match get_adminsdholder_aces(&self.ldap, &naming_context, &self.domains, &self.root_domain) {
-                Ok(aces) => aces,
-                Err(e) => {
-                    eprintln!(" [!] Unable to fetch AdminSDHolder, {} (results will be incomplete)", e);
-                    vec![]
-                }
-            };
-        
+            let domain_sid = &self.domains.iter().find(|d| d.distinguished_name == naming_context)
+                .map(|d| &d.sid)
+                .unwrap_or(&self.root_domain.sid);
+            let schema_aces = schema_aces.get(domain_sid).expect("naming context without an associated domain");
+
             println!("Fetching security descriptors of naming context {}", naming_context);
-            match get_explicit_aces(&self.ldap, &naming_context, &self.root_domain.sid, &self.schema, &adminsdholder_aces[..], &self.ignored_trustee_sids) {
-                Ok( sids) => {
-                    for (sid, locations) in sids.into_iter() {
-                        for (location, mut aces) in locations.into_iter() {
-                            aces_found.entry(sid.clone()).or_insert(HashMap::new())
-                                .entry(location).or_insert(vec![])
-                                .append(&mut aces);
-                        }
-                    }
-                },
-                Err(e) => {
-                    eprintln!(" [!] Error when fetching security descriptors of naming context {} : {}", naming_context, e);
-                    std::process::exit(1);
-                },
-            };
+            let explicit_aces = self.get_explicit_aces(&naming_context, schema_aces)?;
+            res.extend(explicit_aces);
         }
 
-        let mut res: HashMap<Sid, HashMap<DelegationLocation, (Vec<Ace>, Vec<Delegation>, Vec<Delegation>)>> = HashMap::new();
-        for (trustee, expected_locations) in &delegations_in_input {
-            let locations = res.entry(trustee.to_owned()).or_insert(HashMap::new());
-            for (expected_location, _) in expected_locations {
-                locations.entry(expected_location.to_owned()).or_insert((vec![], vec![], vec![]));
-            }
-        }
-        for (trustee, found_locations) in &aces_found {
-            let locations = res.entry(trustee.to_owned()).or_insert(HashMap::new());
-            for (found_location, _) in found_locations {
-                locations.entry(found_location.to_owned()).or_insert((vec![], vec![], vec![]));
-            }
-        }
+        // Move ACEs from "orphan" to "delegations found" if they match an expected delegation
+        // Otherwise let them there, and add the delegation as "missing"
+        for (trustee, expected_locations) in &expected_delegations {
+            for (location, delegations) in expected_locations {
+                for (expected_delegation, expected_aces) in delegations {
+                    let res = match res.get_mut(location) {
+                        Some(Ok(res)) => res,
+                        Some(Err(_)) => continue, // scanning that location failed, don't flag the delegation as "missing"
+                        None => continue, // delegation is for an object outside of our scope, ignore it
+                    };
 
-        // Now, compare found ACEs to "expected" delegations, which gives us a list of delegations in place and orphan ACEs.
-        // In the end, add a list of delegations expected but not found, and you have the entire set of results.
-        let empty_default1 = HashMap::new();
-        let empty_default2 = HashMap::new();
-        let empty_default3 = Vec::new();
-        let empty_default4 = Vec::new();
-        for (trustee, locations) in &mut res {
-            let found_locations = aces_found.get(trustee).unwrap_or(&empty_default1);
-            let expected_locations = delegations_in_input.get(trustee).unwrap_or(&empty_default2);
-            for (location, (ace_orphans, deleg_missing, deleg_found)) in locations {
-                let found_aces = found_locations.get(location).unwrap_or(&empty_default3);
-                let expected_delegations  = expected_locations.get(location).unwrap_or(&empty_default4);
-                let mut explained_aces = vec![false; found_aces.len()];
-
-                for (expected_delegation, expected_aces) in expected_delegations {
-                    if let Some(indexes) = find_ace_positions(expected_aces, found_aces) {
+                    let mut explained_aces = vec![false; res.orphan_aces.len()];
+                    if let Some(indexes) = find_ace_positions(expected_aces, &res.orphan_aces) {
+                        let mut matched_aces = vec![];
                         for index in indexes {
                             explained_aces[index] = true;
+                            matched_aces.push(res.orphan_aces[index].clone());
                         }
-                        deleg_found.push(expected_delegation.to_owned());
+                        res.delegations_found.push((expected_delegation.to_owned(), trustee.clone(), matched_aces));
                     } else {
-                        deleg_missing.push(expected_delegation.to_owned());
+                        res.delegations_missing.push((expected_delegation.to_owned(), trustee.clone()));
                     }
-                }
 
-                for (index, explained) in explained_aces.iter().enumerate() {
-                    if !explained {
-                        ace_orphans.push(found_aces[index].clone());
-                    }
+                    res.orphan_aces = res.orphan_aces.drain(..).enumerate().filter(|(idx, ace)| !explained_aces[*idx]).map(|(idx, ace)| ace).collect();
                 }
             }
         }
 
-        res
+        Ok(res)
     }
 
     pub fn describe_ace(&self, ace: &Ace) -> String {
@@ -479,37 +682,4 @@ impl<'a> Engine<'a> {
         }
         None
     }
-}
-
-fn ace_equivalent(a: &Ace, b: &Ace) -> bool {
-    if a == b {
-        return true;
-    }
-
-    let mut a = a.clone();
-    let mut b = b.clone();
-
-    a.access_mask = a.access_mask & !(crate::delegations::IGNORED_ACCESS_RIGHTS);
-    b.access_mask = b.access_mask & !(crate::delegations::IGNORED_ACCESS_RIGHTS);
-
-    a == b
-}
-
-fn find_ace_positions(needle: &[Ace], haystack: &[Ace]) -> Option<Vec<usize>> {
-    let mut res = vec![];
-    let mut iter = haystack.iter().enumerate();
-    for needle_ace in needle {
-        let mut found = false;
-        while let Some((haystack_pos, haystack_ace)) = iter.next() {
-            if ace_equivalent(haystack_ace, needle_ace) {
-                res.push(haystack_pos);
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            return None;
-        }
-    }
-    Some(res)
 }

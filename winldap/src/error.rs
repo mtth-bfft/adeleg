@@ -2,7 +2,7 @@ use core::fmt::Display;
 use windows::core::alloc::fmt::Formatter;
 use crate::utils::get_ldap_errmsg;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum LdapError {
     ConnectionFailed(u32),
     BindFailed(u32),

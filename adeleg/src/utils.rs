@@ -1,19 +1,12 @@
-use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_DS_DELETE_CHILD, ADS_RIGHT_ACTRL_DS_LIST, ADS_RIGHT_DS_SELF, ADS_RIGHT_DS_READ_PROP, ADS_RIGHT_DS_WRITE_PROP, ADS_RIGHT_DS_DELETE_TREE, ADS_RIGHT_DS_LIST_OBJECT, ADS_RIGHT_DS_CONTROL_ACCESS};
-use authz::{Ace, AceType};
-use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_DELETE, ADS_RIGHT_READ_CONTROL, ADS_RIGHT_WRITE_DAC, ADS_RIGHT_WRITE_OWNER, ADS_RIGHT_SYNCHRONIZE, ADS_RIGHT_ACCESS_SYSTEM_SECURITY, ADS_RIGHT_GENERIC_READ, ADS_RIGHT_GENERIC_WRITE, ADS_RIGHT_GENERIC_EXECUTE, ADS_RIGHT_GENERIC_ALL, ADS_RIGHT_DS_CREATE_CHILD};
-use windows::Win32::Security::DACL_SECURITY_INFORMATION;
-use winldap::control::{BerVal, BerEncodable};
-use windows::Win32::Networking::Ldap::{LDAP_SERVER_SD_FLAGS_OID, LDAP_SCOPE_SUBTREE, LDAP_SCOPE_ONELEVEL};
-use winldap::control::LdapControl;
+use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_DS_DELETE_CHILD, ADS_RIGHT_ACTRL_DS_LIST, ADS_RIGHT_DS_SELF, ADS_RIGHT_DS_READ_PROP, ADS_RIGHT_DS_WRITE_PROP, ADS_RIGHT_DS_DELETE_TREE, ADS_RIGHT_DS_LIST_OBJECT, ADS_RIGHT_DS_CONTROL_ACCESS, ADS_RIGHT_DELETE, ADS_RIGHT_READ_CONTROL, ADS_RIGHT_WRITE_DAC, ADS_RIGHT_WRITE_OWNER, ADS_RIGHT_SYNCHRONIZE, ADS_RIGHT_ACCESS_SYSTEM_SECURITY, ADS_RIGHT_GENERIC_READ, ADS_RIGHT_GENERIC_WRITE, ADS_RIGHT_GENERIC_EXECUTE, ADS_RIGHT_GENERIC_ALL, ADS_RIGHT_DS_CREATE_CHILD};
+use windows::Win32::Security::{CONTAINER_INHERIT_ACE, NO_PROPAGATE_INHERIT_ACE, OBJECT_INHERIT_ACE};
+use windows::Win32::Networking::Ldap::{LDAP_SCOPE_BASE, LDAP_SCOPE_SUBTREE, LDAP_SCOPE_ONELEVEL};
 use core::borrow::Borrow;
-use authz::{Sid, SecurityDescriptor, Guid};
+use authz::{Ace, Sid, SecurityDescriptor, Guid};
 use winldap::connection::LdapConnection;
 use winldap::search::{LdapSearch, LdapEntry};
 use winldap::error::LdapError;
 use winldap::utils::get_attr_str;
-use windows::Win32::Networking::Ldap::LDAP_SCOPE_BASE;
-
-use crate::schema::Schema;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Domain {
@@ -102,19 +95,6 @@ pub(crate) fn get_attr_guid<T: Borrow<LdapEntry>>(search_results: &[T], base: &s
     }
 }
 
-pub(crate) fn get_domain_sid(conn: &LdapConnection, naming_context: &str) -> Option<Sid> {
-    let search = LdapSearch::new(&conn, Some(naming_context), LDAP_SCOPE_BASE, None, Some(&["objectSid"]), &[]);
-    let domain = match search.collect::<Result<Vec<LdapEntry>, LdapError>>() {
-        Ok(v) => v,
-        _ => return None,
-    };
-    let sid = match get_attr_sid(&domain, &naming_context, "objectsid") {
-        Ok(s) => s,
-        _ => return None,
-    };
-    Some(sid)
-}
-
 pub(crate) fn get_domains(conn: &LdapConnection) -> Result<Vec<Domain>, LdapError> {
     let partitions_dn = format!("CN=Partitions,{}", conn.get_configuration_naming_context());
     let search = LdapSearch::new(&conn, Some(&partitions_dn), LDAP_SCOPE_ONELEVEL, Some("(&(nCName=*)(nETBIOSName=*))"), Some(&["nCName", "nETBIOSName"]), &[]);
@@ -124,10 +104,10 @@ pub(crate) fn get_domains(conn: &LdapConnection) -> Result<Vec<Domain>, LdapErro
     for partition in &partitions {
         let nc = get_attr_str(&[partition], &partition.dn, "ncname")?;
         let netbios_name = get_attr_str(&[partition], &partition.dn, "netbiosname")?;
-        let sid = match get_domain_sid(&conn, &nc) {
-            Some(sid) => sid,
-            None => continue,
-        };
+
+        let mut search = LdapSearch::new(&conn, Some(&nc), LDAP_SCOPE_BASE, Some("(objectSid=*)"), Some(&["objectSid"]), &[]);
+        let entry = search.next().ok_or(LdapError::RequiredObjectMissing { dn: nc.clone() })??;
+        let sid = get_attr_sid(&[entry], &nc, "objectsid")?;
 
         v.push(Domain {
             distinguished_name: nc.to_owned(),
@@ -138,21 +118,37 @@ pub(crate) fn get_domains(conn: &LdapConnection) -> Result<Vec<Domain>, LdapErro
     Ok(v)
 }
 
-pub(crate) fn get_adminsdholder_aces(conn: &LdapConnection, naming_context: &str, domains: &[Domain], root_domain: &Domain) -> Result<Vec<Ace>, LdapError> {
-    let nc_holding_object = &domains.iter().find(|dom| dom.distinguished_name == naming_context).unwrap_or(root_domain).distinguished_name;
-    let dn = format!("CN=AdminSDHolder,CN=System,{}", nc_holding_object);
-    let mut sd_control_val = BerVal::new();
-    sd_control_val.append(BerEncodable::Sequence(vec![BerEncodable::Integer((DACL_SECURITY_INFORMATION.0).into())]));
-        let sd_control = LdapControl::new(
-        LDAP_SERVER_SD_FLAGS_OID,
-        &sd_control_val,
-        true)?;
-    let search = LdapSearch::new(&conn, Some(&dn),LDAP_SCOPE_BASE,
-    Some("(objectClass=*)"),
-    Some(&["nTSecurityDescriptor"]), &[&sd_control]);
-    let res = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
-    let sd = get_attr_sd(&res[..],  &dn, "ntsecuritydescriptor")?;
-    Ok(sd.dacl.map(|d| d.aces).unwrap_or(vec![]))
+pub(crate) fn get_ace_derived_by_inheritance(parent_aces: &[Ace], child_owner: &Sid, child_object_type: &Guid, force_inheritance: bool) -> Vec<Ace> {
+    let mut res = vec![];
+    for parent_ace in parent_aces {
+        if !force_inheritance && (parent_ace.flags & CONTAINER_INHERIT_ACE.0 as u8) == 0 {
+            continue;
+        }
+        if let Some(guid) = parent_ace.get_inherited_object_type() {
+            if guid != child_object_type && (parent_ace.flags & NO_PROPAGATE_INHERIT_ACE.0 as u8) != 0 {
+                continue;
+            }
+        }
+        // Creator Owner SID gets replaced by the current owner
+        let trustee = if parent_ace.trustee == Sid::try_from("S-1-3-0").unwrap() {
+            child_owner
+        } else {
+            &parent_ace.trustee
+        }.to_owned();
+
+        let mut flags = parent_ace.flags;
+        if (parent_ace.flags & NO_PROPAGATE_INHERIT_ACE.0 as u8) != 0 {
+            flags &= !(CONTAINER_INHERIT_ACE.0 as u8 | OBJECT_INHERIT_ACE.0 as u8);
+        }
+
+        res.push(Ace {
+            trustee,
+            access_mask: parent_ace.access_mask,
+            flags,
+            type_specific: parent_ace.type_specific.clone(),
+        })
+    }
+    res
 }
 
 pub(crate) fn pretty_print_access_rights(mask: u32) -> String {
@@ -264,4 +260,37 @@ pub(crate) fn resolve_samaccountname_to_sid(ldap: &LdapConnection, samaccountnam
     let search = LdapSearch::new(&ldap, Some(&domain.distinguished_name), LDAP_SCOPE_SUBTREE, Some(&format!("(samAccountName={})", samaccountname)), Some(&["objectSid"]), &[]);
     let res = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;
     get_attr_sid(&res, &domain.distinguished_name, "objectsid")
+}
+
+pub(crate) fn ace_equivalent(a: &Ace, b: &Ace) -> bool {
+    if a == b {
+        return true;
+    }
+
+    let mut a = a.clone();
+    let mut b = b.clone();
+
+    a.access_mask = a.access_mask & !(crate::engine::IGNORED_ACCESS_RIGHTS);
+    b.access_mask = b.access_mask & !(crate::engine::IGNORED_ACCESS_RIGHTS);
+
+    a == b
+}
+
+pub(crate) fn find_ace_positions(needle: &[Ace], haystack: &[Ace]) -> Option<Vec<usize>> {
+    let mut res = vec![];
+    let mut iter = haystack.iter().enumerate();
+    for needle_ace in needle {
+        let mut found = false;
+        while let Some((haystack_pos, haystack_ace)) = iter.next() {
+            if ace_equivalent(haystack_ace, needle_ace) {
+                res.push(haystack_pos);
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return None;
+        }
+    }
+    Some(res)
 }

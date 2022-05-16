@@ -1,25 +1,24 @@
 //#![windows_subsystem = "windows"]
 
 mod utils;
+mod error;
 mod schema;
 mod delegations;
 mod engine;
 mod gui;
 
-use std::collections::{HashMap, HashSet};
-use authz::{Ace, Sid};
-use delegations::{DelegationLocation, DelegationTemplate};
-use winldap::connection::{LdapConnection, LdapCredentials};
+use std::collections::HashMap;
 use windows::Win32::Networking::Ldap::LDAP_PORT;
-use clap::{App, Arg, ArgGroup};
+use clap::{App, Arg};
+use authz::Sid;
+use winldap::connection::{LdapConnection, LdapCredentials};
 use crate::gui::run_gui;
-use crate::schema::Schema;
-use crate::engine::Engine;
-use crate::delegations::{get_explicit_aces, get_schema_aces, Delegation};
-use crate::utils::{get_adminsdholder_aces, get_domains};
+use crate::engine::{Engine, AdelegResult};
+use crate::error::AdelegError;
+use crate::delegations::DelegationLocation;
 
 fn main() {
-    //run_gui();
+    run_gui();
     let default_port = format!("{}", LDAP_PORT);
     let app = App::new(env!("CARGO_PKG_NAME"))
         .version(env!("CARGO_PKG_VERSION"))
@@ -78,12 +77,6 @@ fn main() {
                 .short('D')
                 .value_name("D.json")
                 .multiple_occurrences(true)
-                .number_of_values(1)
-        ).arg(
-            Arg::new("trustee")
-                .help("only show delegations granted to this trustee")
-                .long("trustee")
-                .value_name("SID|samaccountname|DN")
                 .number_of_values(1)
         ).arg(
             Arg::new("index")
@@ -154,107 +147,163 @@ fn main() {
         }
     }
 
-    let mut res = engine.run();
-
-    if let Some(trustee) = args.value_of("trustee") {
-        let sid = match engine.resolve_str_to_sid(trustee) {
-            Some(sid) => sid,
-            None => {
-                eprintln!("Error: Could not resolve trustee \"{}\" (valid syntaxes are SIDs (S-1-5-21-*), distinguished names, and NetbiosName\\samAccountName)", trustee);
-                std::process::exit(1);
-            },
-        };
-        let bak = res.get(&sid).cloned().unwrap_or_default();
-        res.clear();
-    }
+    let res = match engine.run() {
+        Ok(res) => res,
+        Err(e) => {
+            eprintln!("An error occurred while scanning for delegations: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     if args.is_present("csv") {
         let mut writer = csv::Writer::from_writer(std::io::stdout());
-        for (trustee, locations) in &res {
-            for (location, (orphan_aces, deleg_missing, deleg_found)) in locations {
-                for ace in orphan_aces {
+        for (location, res) in &res {
+            let res = match res {
+                Ok(r) => r,
+                Err(e) => {
                     writer.write_record(&[
-                        engine.resolve_sid(trustee).as_str(),
                         location.to_string().as_str(),
-                        if ace.grants_access() { "Allow ACE" } else { "Deny ACE" },
-                        engine.describe_ace(&ace).as_str(),
+                        "",
+                        "Warning",
+                        &e.to_string(),
                     ]).expect("unable to write CSV record");
-                }
-                for deleg in deleg_missing {
-                    writer.write_record(&[
-                        engine.resolve_sid(trustee).as_str(),
-                        location.to_string().as_str(),
-                        "Delegation (missing!)",
-                        deleg.template_name.as_str(),
-                    ]).expect("unable to write CSV record");
-                }
-                for deleg in deleg_found {
-                    writer.write_record(&[
-                        engine.resolve_sid(trustee).as_str(),
-                        location.to_string().as_str(),
-                        "Delegation",
-                        deleg.template_name.as_str(),
-                    ]).expect("unable to write CSV record");
-                }
+                    continue;
+                },
+            };
+            if let Some(non_canonical_ace) = &res.non_canonical_ace {
+                writer.write_record(&[
+                    location.to_string().as_str(),
+                    "",
+                    "Warning",
+                    &format!("ACL is not in canonical order, e.g. this ACE is out of order: {}", non_canonical_ace),
+                ]).expect("unable to write CSV record");
+            }
+            for (deleg, trustee) in &res.delegations_missing {
+                writer.write_record(&[
+                    location.to_string().as_str(),
+                    engine.resolve_sid(&trustee).as_str(),
+                    "Delegation (missing!)",
+                    deleg.template_name.as_str(),
+                ]).expect("unable to write CSV record");
+            }
+            for ace in &res.orphan_aces {
+                writer.write_record(&[
+                    location.to_string().as_str(),
+                    engine.resolve_sid(&ace.trustee).as_str(),
+                    if ace.grants_access() { "Allow ACE" } else { "Deny ACE" },
+                    engine.describe_ace(&ace).as_str(),
+                ]).expect("unable to write CSV record");
+            }
+            for (deleg, trustee, _) in &res.delegations_found {
+                writer.write_record(&[
+                    location.to_string().as_str(),
+                    engine.resolve_sid(&trustee).as_str(),
+                    "Delegation",
+                    deleg.template_name.as_str(),
+                ]).expect("unable to write CSV record");
             }
         }
     }
     else if args.value_of("index").unwrap_or("") == "trustees" {
-        for (trustee, locations) in &res {
-            println!("\n======= {}", engine.resolve_sid(trustee));
-            for (location, (orphan_aces, deleg_missing, deleg_found)) in locations {
-                println!("  - {}", location);
-                if !orphan_aces.is_empty() {
-                    println!("       ACEs:");
-                    for ace in orphan_aces {
-                        println!("         {}: {}", if ace.grants_access() { "Allow" } else { "Deny" }, engine.describe_ace(ace));
-                    }
+        let mut warning_count = 0;
+        let mut reindexed: HashMap<Sid, HashMap<DelegationLocation, AdelegResult>> = HashMap::new();
+        for (location, res) in res.into_iter() {
+            if let Ok(res) = res {
+                if res.non_canonical_ace.is_some() {
+                    warning_count += 1;
                 }
-                if !deleg_missing.is_empty() {
-                    println!("         Delegations missing:");
-                    for delegation in deleg_missing {
-                        println!("         {}", delegation.template_name);
-                    }
+                for ace in res.orphan_aces {
+                    let entry = reindexed.entry(ace.trustee.clone())
+                        .or_default()
+                        .entry(location.clone())
+                        .or_insert_with(|| {
+                            AdelegResult {
+                                non_canonical_ace: None,
+                                orphan_aces: vec![],
+                                delegations_found: vec![],
+                                delegations_missing: vec![],
+                            }
+                        });
+                    entry.orphan_aces.push(ace);
                 }
-                if !deleg_found.is_empty() {
-                    println!("         Delegations in place:");
-                    for delegation in deleg_found {
-                        println!("         {}", delegation.template_name);
-                    }
+                for (deleg, trustee, aces) in res.delegations_found {
+                    let entry = reindexed.entry(trustee.clone())
+                        .or_default()
+                        .entry(location.clone())
+                        .or_insert_with(|| {
+                            AdelegResult {
+                                non_canonical_ace: None,
+                                orphan_aces: vec![],
+                                delegations_found: vec![],
+                                delegations_missing: vec![],
+                            }
+                        });
+                    entry.delegations_found.push((deleg, trustee, aces));
+                }
+            } else {
+                warning_count += 1;
+            }
+        }
+        if warning_count > 0 {
+            eprintln!(" [!] {} warnings were generated during analysis, some results may be incomplete. Use the resource view to see warnings.", warning_count);
+        }
+        for (trustee, locations) in &reindexed {
+            println!("\n=== {}", engine.resolve_sid(trustee));
+            for (location, res) in locations.iter() {
+                println!("       {} :", location);
+                for ace in &res.orphan_aces {
+                    println!("            {} ACE {}",
+                        if ace.grants_access() { "Allow" } else { "Deny" },
+                        engine.describe_ace(&ace));
+                }
+                for (delegation, _) in &res.delegations_missing {
+                    println!("            Delegation missing: {}",
+                        delegation.template_name);
+                }
+                for (delegation, _, _) in &res.delegations_found {
+                    println!("            Documented delegation: {}",
+                        delegation.template_name);
                 }
             }
+        }
+        if warning_count > 0 {
+            eprintln!("\n [!] {} warnings were generated during analysis, some results may be incomplete. Use the resource view to see warnings.", warning_count);
         }
     } else {
-        let mut reindexed = HashMap::new();
-        for (trustee, locations) in res {
-            for (location, (a1, b1, c1)) in locations {
-                let (a2, b2, c2) = reindexed.entry(location).or_insert_with(|| HashMap::new()).entry(trustee.clone()).or_insert_with(|| { (vec![], vec![], vec![])});
-                a2.extend(a1);
-                b2.extend(b1);
-                c2.extend(c1);
+        let mut res: Vec<(&DelegationLocation, &Result<AdelegResult, AdelegError>)> = res.iter().collect();
+        res.sort_by(|(loc_a, _), (loc_b, _)| loc_a.cmp(loc_b));
+        for (location, res) in res {
+            println!("\n=== {}", &location);
+            let res = match res {
+                Ok(r) => r,
+                Err(e) => {
+                    println!("       /!\\ {}", e);
+                    continue;
+                },
+            };
+            if let Some(ace) = &res.non_canonical_ace {
+                println!("       /!\\ ACL is not in canonical order, e.g. see ACE: {}", ace);
             }
-        }
-        for (location, trustees) in reindexed {
-            println!("\n======= {}", &location);
-            for (trustee, (orphan_aces, deleg_missing, deleg_found)) in trustees {
-                println!("  - {}", engine.resolve_sid(&trustee));
-                if !orphan_aces.is_empty() {
-                    println!("       ACEs:");
-                    for ace in orphan_aces {
-                        println!("         {}: {}", if ace.grants_access() { "Allow" } else { "Deny" }, engine.describe_ace(&ace));
-                    }
+
+            if !res.orphan_aces.is_empty() {
+                println!("       ACEs:");
+                for ace in &res.orphan_aces {
+                    println!("         {} {} : {}",
+                        if ace.grants_access() { "Allow" } else { "Deny" },
+                        engine.resolve_sid(&ace.trustee),
+                        engine.describe_ace(&ace));
                 }
-                if !deleg_missing.is_empty() {
-                    println!("         Delegations missing:");
-                    for delegation in deleg_missing {
-                        println!("         {}", delegation.template_name);
-                    }
+            }
+            if !res.delegations_missing.is_empty() {
+                println!("         Delegations missing:");
+                for (delegation, trustee) in &res.delegations_missing {
+                    println!("         {} : {}", engine.resolve_sid(&trustee), delegation.template_name);
                 }
-                if !deleg_found.is_empty() {
-                    println!("         Delegations in place:");
-                    for delegation in deleg_found {
-                        println!("         {}", delegation.template_name);
-                    }
+            }
+            if !res.delegations_found.is_empty() {
+                println!("         Documented delegations:");
+                for (delegation, trustee, aces) in &res.delegations_found {
+                    println!("         {} : {}", engine.resolve_sid(&trustee), delegation.template_name);
                 }
             }
         }

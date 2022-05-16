@@ -2,21 +2,23 @@ extern crate native_windows_gui as nwg;
 extern crate native_windows_derive as nwd;
 
 use std::collections::HashMap;
-use std::{cell::RefCell, borrow::Borrow};
-use stretch::{geometry::Size, style::{FlexDirection, Dimension, PositionType, Style}};
-use std::rc::Rc;
-use nwg::{NativeUi, FontBuilder, ProgressBarFlags, TreeItem};
+use std::cell::RefCell;
+use stretch::{geometry::{Rect, Size}, style::{FlexDirection, FlexWrap, Dimension, PositionType, Style}};
+use nwg::NativeUi;
 use nwd::NwgUi;
 use winldap::connection::{LdapCredentials, LdapConnection};
 use authz::{Ace, Sid};
 use crate::delegations::{DelegationLocation, Delegation};
 use crate::engine::Engine;
+use crate::error::AdelegError;
+use crate::AdelegResult;
 use crate::utils::{ends_with_case_insensitive, replace_suffix_case_insensitive};
 
 #[derive(Default, NwgUi)]
 pub struct BasicApp {
     engine: Option<RefCell<Engine<'static>>>,
-    results: Option<RefCell<HashMap<Sid, HashMap<DelegationLocation, (Vec<Ace>, Vec<Delegation>, Vec<Delegation>)>>>>,
+    results: Option<RefCell<HashMap<DelegationLocation, Result<AdelegResult, AdelegError>>>>,
+    view_by_trustee: bool,
 
     #[nwg_control(maximized: true, title: "ADeleg", flags: "MAIN_WINDOW|VISIBLE")]
     #[nwg_events(
@@ -53,24 +55,46 @@ pub struct BasicApp {
     #[nwg_control(parent: menu_help, text: "About...")]
     menu_help_about: nwg::Menu,
 
-    #[nwg_layout(parent: window, flex_direction: FlexDirection::Column)]
+    #[nwg_layout(parent: window, flex_direction: FlexDirection::Column, flex_wrap: FlexWrap::Wrap, )]
     flex: nwg::FlexboxLayout,
 
     #[nwg_control(parent: window, focus: true)]
-    #[nwg_layout_item(layout: flex)]
+    #[nwg_layout_item(layout: flex,
+        size: Size { width:  Dimension::Percent(0.33), height: Dimension::Percent(1.0) },
+        position: Rect {
+            start: Dimension::Points(0.0),
+            end: Dimension::Undefined,
+            top: Dimension::Points(0.0),
+            bottom: Dimension::Points(0.0),
+        },
+    )]
     #[nwg_events(OnTreeItemSelectionChanged: [BasicApp::handle_treeview_select])]
     tree_view: nwg::TreeView,
 
-    #[nwg_control(list_style: nwg::ListViewStyle::Detailed, ex_flags: nwg::ListViewExFlags::from_bits(nwg::ListViewExFlags::HEADER_DRAG_DROP.bits() | nwg::ListViewExFlags::FULL_ROW_SELECT.bits() | nwg::ListViewExFlags::BORDER_SELECT.bits()).unwrap())]
+    #[nwg_control(parent: window, flags: "VISIBLE|BORDER")]
     #[nwg_layout_item(layout: flex)]
+    warning_frame: nwg::Frame,
+
+    #[nwg_control(parent: window, text: "This is a warning")]
+    #[nwg_layout_item(layout: flex)]
+    warning_text: nwg::RichLabel,
+
+    #[nwg_control(list_style: nwg::ListViewStyle::Detailed, ex_flags: nwg::ListViewExFlags::from_bits(nwg::ListViewExFlags::HEADER_DRAG_DROP.bits() | nwg::ListViewExFlags::FULL_ROW_SELECT.bits() | nwg::ListViewExFlags::BORDER_SELECT.bits()).unwrap())]
+    #[nwg_layout_item(layout: flex,
+        size: Size { width:  Dimension::Percent(0.66), height: Dimension::Percent(0.10) },
+    )]
     list_orphan_ace: nwg::ListView,
 
     #[nwg_control(list_style: nwg::ListViewStyle::Detailed, ex_flags: nwg::ListViewExFlags::from_bits(nwg::ListViewExFlags::HEADER_DRAG_DROP.bits() | nwg::ListViewExFlags::FULL_ROW_SELECT.bits() | nwg::ListViewExFlags::BORDER_SELECT.bits()).unwrap())]
-    #[nwg_layout_item(layout: flex)]
+    #[nwg_layout_item(layout: flex,
+        size: Size { width:  Dimension::Percent(0.66), height: Dimension::Percent(0.10) }
+    )]
     list_deleg_missing: nwg::ListView,
 
     #[nwg_control(list_style: nwg::ListViewStyle::Detailed, ex_flags: nwg::ListViewExFlags::from_bits(nwg::ListViewExFlags::HEADER_DRAG_DROP.bits() | nwg::ListViewExFlags::FULL_ROW_SELECT.bits() | nwg::ListViewExFlags::BORDER_SELECT.bits()).unwrap())]
-    #[nwg_layout_item(layout: flex)]
+    #[nwg_layout_item(layout: flex,
+        size: Size { width:  Dimension::Percent(0.66), height: Dimension::Percent(0.10) },
+    )]
     list_deleg_found: nwg::ListView,
 }
 
@@ -109,6 +133,52 @@ impl BasicApp {
         self.refresh();
     }
 
+    fn location_to_tree_path(&self, location: &DelegationLocation) -> Vec<String> {
+        match &location {
+            DelegationLocation::Global => vec!["Global".to_owned()],
+            DelegationLocation::DefaultSecurityDescriptor(class_name) => vec!["Global".to_owned(), format!("All {} objects", class_name)],
+            DelegationLocation::Dn(dn) => {
+                // Naming contexts overlap: we need to get the longest matching suffix (DC=DomainDnsZones,DC=example,DC=com
+                // and not DC=example,DC=com)
+                let engine = self.engine.as_ref().unwrap().borrow();
+                let mut longest_match: Option<String> = None;
+                for nc in &engine.naming_contexts {
+                    if ends_with_case_insensitive(&dn, nc) {
+                        if nc.len() > longest_match.as_ref().map(|s| s.len()).unwrap_or(0) {
+                            longest_match = Some(nc.to_string());
+                        }
+                    }
+                }
+                if let Some(nc) = longest_match {
+                    let dn = replace_suffix_case_insensitive(&dn, &nc, "");
+                    let mut parts = vec![nc];
+                    for part in dn.trim_matches(',').split(',').filter(|s| s.len() > 0).rev() {
+                        parts.push(part.to_owned());
+                    }
+                    return parts;
+                }
+                vec![dn.to_owned()]
+            },
+        }
+    }
+
+    fn tree_path_to_location(&self, tree_path: &[String]) -> DelegationLocation {
+        if tree_path.first().map(|s| s.as_str()) == Some("Global") {
+            if let Some(class_name) = tree_path.get(1) {
+                if let Some(class_name) = class_name.strip_prefix("All ") {
+                    if let Some(class_name) = class_name.strip_suffix(" objects") {
+                        return DelegationLocation::DefaultSecurityDescriptor(class_name.to_string())
+                    }
+                }
+                panic!("assertion failed: unable to map tree path to a delegation location");
+            } else {
+                DelegationLocation::Global
+            }
+        } else {
+            DelegationLocation::Dn(tree_path.join(","))
+        }
+    }
+
     fn refresh(&self) {
         self.window.focus();
         self.tree_view.clear();
@@ -118,39 +188,63 @@ impl BasicApp {
 
         let engine = self.engine.as_ref().unwrap().borrow();
         let mut results = self.results.as_ref().unwrap().borrow_mut();
+        let naming_contexts = &engine.naming_contexts[..];
         results.clear();
-        results.extend(engine.run());
+        let new_results = match engine.run() {
+            Ok(r) => r,
+            Err(e) => {
+                self.tree_view.clear();
+                self.tree_view.insert_item("Error", None, nwg::TreeInsert::Root);
+                let p = nwg::MessageParams {
+                    title: "Error",
+                    content: &format!("Unable to scan for delegations: {}", e),
+                    buttons: nwg::MessageButtons::Ok,
+                    icons: nwg::MessageIcons::Error
+                };
+                nwg::message(&p);
+                HashMap::new()
+            },
+        };
+        results.extend(new_results);
 
         self.tree_view.clear();
-        for (trustee, _) in results.iter() {
-            let trustee = self.engine.as_ref().unwrap().borrow().resolve_sid(trustee);
-            let parts = self.engine.as_ref().unwrap().borrow().split_trustee_components(&trustee);
-            let mut parent = None;
-            let mut cursor = self.tree_view.root();
-            for part in &parts {
-                loop {
-                    match cursor.take() {
-                        Some(node) => {
-                            if let Some(txt) = self.tree_view.item_text(&node) {
-                                if &txt == part {
-                                    cursor = self.tree_view.first_child(&node);
-                                    parent = Some(node);
-                                    break;
+
+        if self.view_by_trustee {
+
+        } else {
+            let mut results: Vec<(&DelegationLocation, &Result<AdelegResult, AdelegError>)> = results.iter().collect();
+            results.sort_by(|(loc_a, _), (loc_b, _)| loc_a.cmp(loc_b));
+            for (location, res) in results {
+                // Find the tree node associated with that location
+                let mut parent = None;
+                let mut cursor = self.tree_view.root();
+                let path = self.location_to_tree_path(&location);
+                for part in &path {
+                    loop {
+                        match cursor.take() {
+                            Some(node) => {
+                                if let Some(txt) = self.tree_view.item_text(&node) {
+                                    if &txt == part {
+                                        cursor = self.tree_view.first_child(&node);
+                                        parent = Some(node);
+                                        break;
+                                    }
                                 }
+                                cursor = self.tree_view.next_sibling(&node);
+                            },
+                            None => {
+                                let node = self.tree_view.insert_item(part, parent.as_ref(), nwg::TreeInsert::Last);
+                                cursor = self.tree_view.first_child(&node);
+                                parent = Some(node);
+                                break;
                             }
-                            cursor = self.tree_view.next_sibling(&node);
-                        },
-                        None => {
-                            let node = self.tree_view.insert_item(part, parent.as_ref(), nwg::TreeInsert::Last);
-                            cursor = self.tree_view.first_child(&node);
-                            parent = Some(node);
-                            break;
                         }
                     }
                 }
             }
         }
         self.tree_view.set_enabled(true);
+        self.flex.fit().expect("flexbox layout fit error");
     }
 
     fn show_template_load_dialog(&self) {
@@ -236,71 +330,76 @@ impl BasicApp {
         self.list_deleg_missing.clear();
         self.list_deleg_found.clear();
 
-        let mut selected_dn = String::new();
+        let mut path = vec![];
         let mut node = self.tree_view.selected_item();
         while let Some(item) = node {
             match self.tree_view.item_text(&item) {
-                Some(txt) => {
-                    if selected_dn.is_empty() {
-                        selected_dn = txt;
-                    } else {
-                        selected_dn = format!("{},{}", selected_dn, txt);
-                    }
-                },
+                Some(txt) => path.push(txt),
                 None => return,
             }
             node = self.tree_view.parent(&item);
         }
 
-        if let Some(sid) = self.engine.as_ref().unwrap().borrow().resolve_str_to_sid(&selected_dn) {
-            let results = self.results.as_ref().unwrap().borrow();
-            let engine = self.engine.as_ref().unwrap().borrow();
+        let location = self.tree_path_to_location(&path);
+        let results = self.results.as_ref().unwrap().borrow();
+        let engine = self.engine.as_ref().unwrap().borrow();
 
-            if let Some(locations) = results.get(&sid) {
-                for (location, (orphan_aces, deleg_missing, deleg_found)) in locations {
-                    for ace in orphan_aces {
-                        self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
-                            index: Some(0),
-                            column_index: 0,
-                            text: Some(location.to_string()),
-                            image: None,
-                        });
-                        self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
-                            index: Some(0),
-                            column_index: 1,
-                            text: Some(engine.describe_ace(ace)),
-                            image: None,
-                        });
-                    }
-                    for delegation in deleg_missing {
-                        self.list_deleg_missing.insert_item(nwg::InsertListViewItem {
-                            index: Some(0),
-                            column_index: 0,
-                            text: Some(location.to_string()),
-                            image: None,
-                        });
-                        self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
-                            index: Some(0),
-                            column_index: 1,
-                            text: Some(delegation.template_name.clone()),
-                            image: None,
-                        });
-                    }
-                    for delegation in deleg_found {
-                        self.list_deleg_found.insert_item(nwg::InsertListViewItem {
-                            index: Some(0),
-                            column_index: 0,
-                            text: Some(location.to_string()),
-                            image: None,
-                        });
-                        self.list_deleg_found.insert_item(nwg::InsertListViewItem {
-                            index: Some(0),
-                            column_index: 1,
-                            text: Some(delegation.template_name.clone()),
-                            image: None,
-                        });
-                    }
-                }
+        if let Some(result) = results.get(&location) {
+            let result = match result {
+                Ok(res) => res,
+                Err(e) => {
+                    self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
+                        index: Some(0),
+                        column_index: 0,
+                        text: Some(format!("FIXME: {}", e)),
+                        image: None,
+                    });
+                    return;
+                },
+            };
+
+            for ace in &result.orphan_aces {
+                self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
+                    index: Some(0),
+                    column_index: 0,
+                    text: Some(engine.resolve_sid(&ace.trustee)),
+                    image: None,
+                });
+                self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
+                    index: Some(0),
+                    column_index: 1,
+                    text: Some(engine.describe_ace(ace)),
+                    image: None,
+                });
+            }
+
+            for (delegation, trustee) in &result.delegations_missing {
+                self.list_deleg_missing.insert_item(nwg::InsertListViewItem {
+                    index: Some(0),
+                    column_index: 0,
+                    text: Some(engine.resolve_sid(&trustee)),
+                    image: None,
+                });
+                self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
+                    index: Some(0),
+                    column_index: 1,
+                    text: Some(delegation.template_name.clone()),
+                    image: None,
+                });
+            }
+            for (delegation, trustee, _) in &result.delegations_found {
+                self.list_deleg_found.insert_item(nwg::InsertListViewItem {
+                    index: Some(0),
+                    column_index: 0,
+                    text: Some(engine.resolve_sid(&trustee)),
+                    image: None,
+                });
+                self.list_deleg_found.insert_item(nwg::InsertListViewItem {
+                    index: Some(0),
+                    column_index: 1,
+                    text: Some(delegation.template_name.clone()),
+                    image: None,
+                });
             }
         }
     }
