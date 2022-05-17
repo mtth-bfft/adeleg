@@ -47,19 +47,21 @@ impl Acl {
     }
 
     pub fn check_canonicality(&self) -> Result<(), Ace> {
-        let mut in_deny_aces = true;
-        let mut in_explicit_aces = true;
+        let mut prev_ace: Option<&Ace> = None;
         for ace in &self.aces {
-            if ace.grants_access() {
-                in_deny_aces = false;
-            } else if !in_deny_aces {
-                return Err(ace.to_owned());
+            if let Some(prev_ace) = prev_ace {
+                // Bad patterns we are looking for:
+                // Explicit ACE after an inherited one
+                if !ace.is_inherited() && prev_ace.is_inherited() {
+                    return Err(ace.to_owned());
+                }
+                // Deny ACE after an allow one, except when switching from explicit to inherited ACEs
+                if !ace.grants_access() && prev_ace.grants_access() && !(!prev_ace.is_inherited() && ace.is_inherited()) {
+                    return Err(ace.to_owned());
+                }
             }
-            if ace.is_inherited() {
-                in_explicit_aces = false;
-            } else if !in_explicit_aces {
-                return Err(ace.to_owned());
-            }
+
+            prev_ace = Some(ace);
         }
         Ok(())
     }
