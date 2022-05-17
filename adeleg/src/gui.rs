@@ -192,6 +192,29 @@ impl BasicApp {
         {
             *(self.view_by_trustee.borrow_mut()) = true;
         }
+        let results = self.results.as_ref().unwrap().borrow();
+        let mut warning_count = 0;
+        for (_, result) in results.iter() {
+            match result {
+                Ok(res) => {
+                    if res.non_canonical_ace.is_some() {
+                        warning_count += 1;
+                    }
+                },
+                Err(_) => {
+                    warning_count += 1;
+                },
+            }
+        }
+        if warning_count > 0 {
+            let p = nwg::MessageParams {
+                title: "About ADeleg",
+                content: &format!("{} warnings were generated during analysis, switch back to Resources view to see them", warning_count),
+                buttons: nwg::MessageButtons::Ok,
+                icons: nwg::MessageIcons::Warning
+            };
+            nwg::message(&p);
+        }
         self.redraw();
     }
 
@@ -475,6 +498,7 @@ impl BasicApp {
             icons: nwg::MessageIcons::Info,
         };
         nwg::message(&p);
+        self.refresh();
     }
 
     fn handle_treeview_select(&self) {
