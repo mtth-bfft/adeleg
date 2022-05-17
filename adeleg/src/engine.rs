@@ -440,6 +440,7 @@ impl<'a> Engine<'a> {
         Ok(res)
     }
 
+    // Describe this ACE access rights as a string, without mentionning the trustee or the location
     pub fn describe_ace(&self, ace: &Ace) -> String {
         let mut res = vec![];
 

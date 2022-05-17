@@ -3,6 +3,7 @@ name = "adeleg"
 version = "0.1.0"
 edition = "2021"
 authors = ["Aurélien Bordes <aurelien.bordes@ssi.gouv.fr>", "Matthieu Buffet <matthieu.buffet@ssi.gouv.fr>"]
+repository = "https://github.com/mtth-bfft/adeleg"
 
 [dependencies]
 clap = "3.0.13"
