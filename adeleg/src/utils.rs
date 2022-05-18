@@ -118,7 +118,7 @@ pub(crate) fn get_domains(conn: &LdapConnection) -> Result<Vec<Domain>, LdapErro
     Ok(v)
 }
 
-pub(crate) fn get_ace_derived_by_inheritance(parent_aces: &[Ace], child_owner: &Sid, child_object_type: &Guid, force_inheritance: bool) -> Vec<Ace> {
+pub(crate) fn get_ace_derived_by_inheritance_from_schema(parent_aces: &[Ace], child_owner: &Sid, child_object_type: &Guid, force_inheritance: bool) -> Vec<Ace> {
     let mut res = vec![];
     for parent_ace in parent_aces {
         if !force_inheritance && (parent_ace.flags & CONTAINER_INHERIT_ACE.0 as u8) == 0 {

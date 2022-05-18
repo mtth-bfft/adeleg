@@ -295,13 +295,13 @@ fn main() {
                 }
             }
             if !res.delegations_missing.is_empty() {
-                println!("         Delegations missing:");
+                println!("       Delegations missing:");
                 for (delegation, trustee) in &res.delegations_missing {
                     println!("         {} : {}", engine.resolve_sid(&trustee), delegation.template_name);
                 }
             }
             if !res.delegations_found.is_empty() {
-                println!("         Documented delegations:");
+                println!("       Documented delegations:");
                 for (delegation, trustee, aces) in &res.delegations_found {
                     println!("         {} : {}", engine.resolve_sid(&trustee), delegation.template_name);
                 }
