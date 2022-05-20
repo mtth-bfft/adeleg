@@ -574,7 +574,7 @@ impl<'a> Engine<'a> {
                     res.push("Perform all validated writes".to_owned());
                 }
             } else {
-                res.push("SELF".to_owned());
+                res.push("VALIDATED_WRITE/SELF".to_owned());
             }
         }
         if (ace.access_mask & ADS_RIGHT_ACCESS_SYSTEM_SECURITY.0 as u32) != 0 {

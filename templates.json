@@ -2,7 +2,7 @@
     {
         "name": "Create new user accounts",
         "description": "Create user account objects in a container and nested containers. If filling their profile and setting their password is not done within the same request, at the same time, you will also need to delegate these actions.",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["organizationalUnit", "builtindomain", "domain"]
         },
         "rights": [
@@ -18,7 +18,7 @@
     {
         "name": "Create direct child objects of any type in a container",
         "description": "Create objects of any type in a container (but not in nested containers)",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["organizationalUnit", "builtindomain", "domain"]
         },
         "rights": [
@@ -30,7 +30,7 @@
     {
         "name": "Allow setting blank passwords violating any password policy (also requires the right to change user account control properties)",
         "description": "This right, when combined with the ability to change user account control flags, allows setting a flag on an account. Until that flag is unset, setting empty passwords for that account will be allowed",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["organizationalUnit", "builtindomain", "domain", "user"]
         },
         "rights": [
@@ -43,7 +43,7 @@
     {
         "name": "Restore expired passwords and set passwords to never expire (also requires the right to change user account control properties)",
         "description": "This right, when combined with the ability to change user account control flags, allows making an account password bypass any expiration policy",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["organizationalUnit", "builtindomain", "domain", "user"]
         },
         "rights": [
@@ -56,7 +56,7 @@
     {
         "name": "Force user passwords to be stored reversibly encrypted (also requires the right to change user account control properties)",
         "description": "This right, when combined with the ability to change user account control flags, allows setting a flag on accounts to store their password (and not something cryptographically derived from it) the next time they change it",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["organizationalUnit", "builtindomain", "domain", "user"]
         },
         "rights": [
@@ -69,7 +69,7 @@
     {
         "name": "Create new security groups",
         "description": "Create security group objects. To fill them with members, you will also need to delegate the right to change their memberships.",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["organizationalUnit", "builtindomain", "domain"]
         },
         "rights": [
@@ -85,7 +85,7 @@
     {
         "name": "Create new computer objects",
         "description": "Provision computer accounts for workstation or servers which will need to join the domain.",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["organizationalUnit", "builtindomain", "domain"]
         },
         "rights": [
@@ -101,7 +101,7 @@
     {
         "name": "Unlock user accounts",
         "description": "Unlock user accounts which have been locked out for trying too many invalid passwords.",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["organizationalUnit", "builtindomain", "domain", "user"]
         },
         "rights": [
@@ -118,7 +118,7 @@
     {
         "name": "Change user profile identification information",
         "description": "Set identification fields of accounts (e.g. name, surname, phone, email address). This cannot be abused to take control of these accounts, the worst one can do with this is make an account appear as someone else.",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["domain", "builtindomain", "organizationalUnit", "user"]
         },
         "rights": [
@@ -150,9 +150,44 @@
         ]
     },
     {
+        "name": "Manage a computer or service account",
+        "description": "Set properties (e.g. name, surname, phone, email address).",
+        "applies_to": {
+            "any_instance_of": ["domain", "builtindomain", "organizationalUnit", "user"]
+        },
+        "rights": [
+            {
+                "allow": false,
+                "access_mask": 32,
+                "object_type": "altSecurityIdentities",
+                "container_inherit": true,
+                "object_inherit": true,
+                "inherit_only": true,
+                "inherited_object_type": "user"
+            },
+            {
+                "access_mask": 48,
+                "object_type": "Public Information",
+                "container_inherit": true,
+                "object_inherit": true,
+                "inherit_only": true,
+                "inherited_object_type": "user"
+            },
+            {
+                "access_mask": 48,
+                "object_type": "Personal Information",
+                "container_inherit": true,
+                "object_inherit": true,
+                "inherit_only": true,
+                "inherited_object_type": "user"
+            }
+        ]
+    },
+
+    {
         "name": "Reset user password without knowing their current one",
         "description": "This gives complete control over accounts, use with caution. You probably also want to delegate the right to force them to change password at next logon.",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["domain", "builtindomain", "organizationalUnit", "container"]
         },
         "rights": [
@@ -177,7 +212,7 @@
     {
         "name": "Force user to change password",
         "description": "Force a user to change their password the next time they log in interactively.",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["domain", "builtindomain", "organizationalUnit", "container"]
         },
         "rights": [
@@ -194,7 +229,7 @@
     {
         "name": "Add or remove oneself to group",
         "description": "Grants a trustee the right to add themselves to the group(s) where this is delegated. This gives them \"control\" over the group, but they cannot add someone other than themselves.",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["organizationalUnit", "group"]
         },
         "rights": [
@@ -210,7 +245,7 @@
     {
         "name": "Add or remove anyone to group",
         "description": "Add and remove any user, computer, or service account to the group(s) where this is delegated. This gives \"control\" over the group.",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["organizationalUnit", "group"]
         },
         "rights": [
@@ -226,7 +261,7 @@
     {
         "name": "Link and unlink existing group policies, and set the \"enforce\" flag on links",
         "description": "Linking and unlinking a GPO on a scope allows managing user and computer settings globally. You may also want to delegate the right to create GPOs by adding trustees to the Group Policy Creator Owners group.",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["organizationalUnit", "domain", "site"]
         },
         "rights": [
@@ -249,7 +284,7 @@
     {
         "name": "Manage a DNS zone",
         "description": "Create DNS records and edit existing ones within a DNS zone",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["dnsZone"]
         },
         "rights": [
@@ -267,7 +302,7 @@
     {
         "name": "Create inbound domain or forest trusts",
         "description": "Make third-party domains or forests trust this domain",
-        "resource": {
+        "applies_to": {
             "domain_dn": "CN=Builtin,DC=*"
         },
         "rights": [
@@ -280,7 +315,7 @@
     {
         "name": "Add and modify user certificates declared for their communications, e.g. by email",
         "description": "Manage certificates used by user accounts to communicate e.g. via email (this can allow intercepting communications, in some cases)",
-        "resource": {
+        "applies_to": {
             "domain_dn": "CN=AdminSDHolder,CN=System,DC=*"
         },
         "rights": [
@@ -293,7 +328,7 @@
     {
         "name": "Fully control a container and all objects within it",
         "description": "Manage and completely control a container and its contents (this allows takeover of user, computer, and service accounts)",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["domain", "builtindomain", "organizationalUnit", "container"]
         },
         "rights": [
@@ -306,7 +341,7 @@
     {
         "name": "Fully control an object",
         "description": "Manage and completely control an object (if delegated on a user, computer, or service account, this allows complete takeover)",
-        "resource": {
+        "applies_to": {
             "domain_dn": "FIXME"
         },
         "rights": [
@@ -318,7 +353,7 @@
     {
         "name": "Read and write logon attributes used by Windows Hello for Business",
         "description": "Read and write certificates used by accounts to authenticate (this allows takeover of user, computer, and service accounts)",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["domain", "builtindomain", "organizationalUnit", "container"]
         },
         "rights": [
@@ -332,7 +367,7 @@
     {
         "name": "Read and write Terminal Server specific user attributes",
         "description": "Read and write attributes used by Terminal Server internally. This is a built-in delegation which you should not have to use",
-        "resource": {
+        "applies_to": {
             "domain_dn": "FIXME"
         },
         "rights": [
@@ -349,7 +384,7 @@
     {
         "name": "Replicate as a read-only domain controller",
         "description": "Replicate a filtered set of attributes. This is a built-in delegation which you should not have to use",
-        "resource": "global",
+        "applies_to": "global",
         "rights": [
             {
                 "access_mask": 256,
@@ -427,7 +462,7 @@
     {
         "name": "Create empty GPOs in a domain",
         "description": "Create new group policy objects (you may also want to delegate the right to link these GPOs on some organizational unit(s))",
-        "resource": {
+        "applies_to": {
             "any_instance_of": ["domain"]
         },
         "rights": [

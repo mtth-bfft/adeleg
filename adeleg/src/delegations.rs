@@ -157,7 +157,7 @@ pub struct DelegationTemplate {
     pub(crate) description: String,
     #[serde(skip_serializing_if = "is_default")]
     #[serde(default)]
-    pub(crate) resource: Option<TemplateResourceFilter>,
+    pub(crate) applies_to: Option<TemplateResourceFilter>,
     pub(crate) rights: Vec<DelegationAce>,
 }
 
