@@ -120,6 +120,10 @@ impl<'a> Engine<'a> {
             Ok(f) => f,
             Err(e) => return Err(format!("Unable to open file {} : {}", template_path, e)),
         };
+        let json = json.trim();
+        if json.is_empty() {
+            return Ok(()); // empty file are invalid JSON, just skip them
+        }
         let templates = match DelegationTemplate::from_json(&json, &self.schema) {
             Ok(v) => v,
             Err(e) => return Err(format!("Unable to parse template file {} : {}", template_path, e)),
@@ -135,13 +139,15 @@ impl<'a> Engine<'a> {
             Ok(f) => f,
             Err(e) => return Err(format!("Unable to open file {} : {}", delegation_path, e)),
         };
-        let delegations = match Delegation::from_json(&json, &self.templates) {
+        let json = json.trim();
+        if json.is_empty() {
+            return Ok(()); // empty file are invalid JSON, just skip them
+        }
+        let mut delegations = match Delegation::from_json(&json, &self.templates) {
             Ok(v) => v,
             Err(e) => return Err(format!("Unable to parse delegation file {} : {}", delegation_path, e)),
         };
-        for delegation in delegations.into_iter() {
-            self.delegations.push(delegation);
-        }
+        self.delegations.append(&mut delegations);
         Ok(())
     }
 
