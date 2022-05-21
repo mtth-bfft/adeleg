@@ -671,6 +671,11 @@ impl BasicApp {
 }
 
 pub(crate) fn run_gui() {
+    // Avoid leaving a console window opened in the background when in production
+    // but this is useful to keep error messages in debug
+    #[cfg(not(debug_assertions))]
+    unsafe { windows::Win32::System::Console::FreeConsole(); }
+
     nwg::init().expect("Failed to init Native Windows GUI");
     let mut default_font = nwg::Font::default();
     if nwg::Font::builder().family("Segoe UI").size(15).build(&mut default_font).is_ok() {

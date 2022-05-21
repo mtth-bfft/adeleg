@@ -1,5 +1,3 @@
-//#![windows_subsystem = "windows"]
-
 mod utils;
 mod error;
 mod schema;
@@ -18,7 +16,11 @@ use crate::error::AdelegError;
 use crate::delegations::DelegationLocation;
 
 fn main() {
-    run_gui();
+    if std::env::args().count() <= 1 {
+        run_gui();
+        return;
+    }
+
     let default_port = format!("{}", LDAP_PORT);
     let app = App::new(env!("CARGO_PKG_NAME"))
         .version(env!("CARGO_PKG_VERSION"))
@@ -100,7 +102,6 @@ fn main() {
         );
 
     let args = app.get_matches();
-
     let server= args.value_of("server");
     let port = args.value_of("port").expect("no port set");
     let port = match port.parse::<u16>() {
