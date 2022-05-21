@@ -549,8 +549,14 @@ impl BasicApp {
                         });
                         self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
-                            column_index: 1,
-                            text: Some(engine.describe_ace(ace)),
+                            column_index: 2,
+                            text: Some(engine.describe_ace(
+                                ace.access_mask,
+                                ace.get_object_type(),
+                                ace.get_inherited_object_type(),
+                                ace.get_container_inherit(),
+                                ace.get_inherit_only()
+                            )),
                             image: None,
                         });
                     }
@@ -611,8 +617,20 @@ impl BasicApp {
                     self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 1,
-                        text: Some(engine.describe_ace(ace)),
+                        text: Some(engine.resolve_sid(&ace.trustee)),
                         image: None,
+                    });
+                    self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
+                        index: Some(0),
+                        column_index: 2,
+                        text: Some(engine.describe_ace(
+                            ace.access_mask,
+                            ace.get_object_type(),
+                            ace.get_inherited_object_type(),
+                            ace.get_container_inherit(),
+                            ace.get_inherit_only()
+                        )),
+                    image: None,
                     });
                 }
                 for (delegation, trustee) in &result.delegations_missing {

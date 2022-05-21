@@ -12,6 +12,7 @@ use crate::delegations::{Delegation, DelegationTemplate, DelegationLocation, Del
 use crate::error::AdelegError;
 use crate::utils::{Domain, find_ace_positions, get_ace_derived_by_inheritance_from_schema, get_domains, get_attr_sid, get_attr_sd, ends_with_case_insensitive, capitalize};
 use crate::schema::Schema;
+use authz::Guid;
 
 pub const BUILTIN_ACES: &str = include_str!("..\\builtin_delegations.json");
 
@@ -434,25 +435,28 @@ impl<'a> Engine<'a> {
 
     pub fn describe_delegation_rights(&self, delegation_rights: &DelegationRights) -> String {
         match delegation_rights {
-            DelegationRights::Ace(ace) => {
-                // FIXME
-                format!("{:?}", ace)
-            },
+            DelegationRights::Ace(ace) => self.describe_ace(
+                ace.access_mask,
+                ace.object_type.as_ref(),
+                ace.inherited_object_type.as_ref(),
+                ace.container_inherit,
+                ace.inherit_only
+            ),
             DelegationRights::TemplateName { template } => template.clone(),
             DelegationRights::Template(template) => template.name.clone(),
         }
     }
 
     // Describe this ACE access rights as a string, without mentionning the trustee or the location
-    pub fn describe_ace(&self, ace: &Ace) -> String {
+    pub fn describe_ace(&self, access_mask: u32, object_type: Option<&Guid>, inherit_object_type: Option<&Guid>, container_inherit: bool, inherit_only: bool) -> String {
         let mut res = vec![];
 
-        if !self.resolve_names && (ace.access_mask & ADS_RIGHT_DS_READ_PROP.0 as u32) != 0 {
+        if !self.resolve_names && (access_mask & ADS_RIGHT_DS_READ_PROP.0 as u32) != 0 {
             res.push("READ_PROP".to_owned());
         }
-        if (ace.access_mask & ADS_RIGHT_DS_WRITE_PROP.0 as u32) != 0 {
+        if (access_mask & ADS_RIGHT_DS_WRITE_PROP.0 as u32) != 0 {
             if self.resolve_names {
-                if let Some(guid) = ace.get_object_type() {
+                if let Some(guid) = object_type {
                     if let Some(name) = self.schema.attribute_guids.get(guid) {
                         res.push(format!("Write attribute {}", name));
                     }
@@ -469,9 +473,9 @@ impl<'a> Engine<'a> {
                 res.push("WRITE_PROP".to_owned());
             }
         }
-        if (ace.access_mask & ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32) != 0 {
+        if (access_mask & ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32) != 0 {
             if self.resolve_names {
-                if let Some(guid) = ace.get_object_type() {
+                if let Some(guid) = object_type {
                     if let Some(name) = self.schema.control_access_names.get(guid) {
                         res.push(capitalize(name));
                     } else {
@@ -485,9 +489,9 @@ impl<'a> Engine<'a> {
                 res.push("CONTROL_ACCESS".to_owned());
             }
         }
-        if (ace.access_mask & ADS_RIGHT_DS_CREATE_CHILD.0 as u32) != 0 {
+        if (access_mask & ADS_RIGHT_DS_CREATE_CHILD.0 as u32) != 0 {
             if self.resolve_names {
-                if let Some(guid) = ace.get_object_type() {
+                if let Some(guid) = object_type {
                     let mut found = false;
                     for (class_name, class_guid) in &self.schema.class_guids {
                         if class_guid == guid {
@@ -507,9 +511,9 @@ impl<'a> Engine<'a> {
                 res.push("CREATE_CHILD".to_owned());
             }
         }
-        if (ace.access_mask & ADS_RIGHT_DS_DELETE_CHILD.0 as u32) != 0 {
+        if (access_mask & ADS_RIGHT_DS_DELETE_CHILD.0 as u32) != 0 {
             if self.resolve_names {
-                if let Some(guid) = ace.get_object_type() {
+                if let Some(guid) = object_type {
                     let mut found = false;
                     for (class_name, class_guid) in &self.schema.class_guids {
                         if class_guid == guid {
@@ -529,46 +533,46 @@ impl<'a> Engine<'a> {
                 res.push("DELETE_CHILD".to_owned());
             }
         }
-        if !self.resolve_names && (ace.access_mask & ADS_RIGHT_ACTRL_DS_LIST.0 as u32) != 0 {
+        if !self.resolve_names && (access_mask & ADS_RIGHT_ACTRL_DS_LIST.0 as u32) != 0 {
             res.push("LIST_CHILDREN".to_owned());
         }
-        if !self.resolve_names && (ace.access_mask & ADS_RIGHT_DS_LIST_OBJECT.0 as u32) != 0 {
+        if !self.resolve_names && (access_mask & ADS_RIGHT_DS_LIST_OBJECT.0 as u32) != 0 {
             res.push("LIST_OBJECT".to_owned());
         }
-        if !self.resolve_names && (ace.access_mask & ADS_RIGHT_READ_CONTROL.0 as u32) != 0 {
+        if !self.resolve_names && (access_mask & ADS_RIGHT_READ_CONTROL.0 as u32) != 0 {
             res.push("READ_CONTROL".to_owned());
         }
-        if (ace.access_mask & ADS_RIGHT_WRITE_OWNER.0 as u32) != 0 {
+        if (access_mask & ADS_RIGHT_WRITE_OWNER.0 as u32) != 0 {
             res.push(if self.resolve_names {
                 "Change the owner"
             } else {
                 "WRITE_OWNER"
             }.to_owned());
         }
-        if (ace.access_mask & ADS_RIGHT_WRITE_DAC.0 as u32) != 0 {
+        if (access_mask & ADS_RIGHT_WRITE_DAC.0 as u32) != 0 {
             res.push(if self.resolve_names {
                 "Add/delete delegations"
             } else {
                 "WRITE_DAC"
             }.to_owned());
         }
-        if (ace.access_mask & ADS_RIGHT_DELETE.0 as u32) != 0 {
+        if (access_mask & ADS_RIGHT_DELETE.0 as u32) != 0 {
             res.push(if self.resolve_names {
                 "Delete"
             } else {
                 "DELETE"
             }.to_owned());
         }
-        if (ace.access_mask & ADS_RIGHT_DS_DELETE_TREE.0 as u32) != 0 {
+        if (access_mask & ADS_RIGHT_DS_DELETE_TREE.0 as u32) != 0 {
             res.push(if self.resolve_names {
                 "Delete along with all children"
             } else {
                 "DELETE_TREE"
             }.to_owned());
         }
-        if (ace.access_mask & ADS_RIGHT_DS_SELF.0 as u32) != 0 {
+        if (access_mask & ADS_RIGHT_DS_SELF.0 as u32) != 0 {
             if self.resolve_names {
-                if let Some(guid) = ace.get_object_type() {
+                if let Some(guid) = object_type {
                     if let Some(name) = self.schema.validated_write_names.get(guid) {
                         res.push(capitalize(name));
                     } else {
@@ -582,7 +586,7 @@ impl<'a> Engine<'a> {
                 res.push("VALIDATED_WRITE/SELF".to_owned());
             }
         }
-        if (ace.access_mask & ADS_RIGHT_ACCESS_SYSTEM_SECURITY.0 as u32) != 0 {
+        if (access_mask & ADS_RIGHT_ACCESS_SYSTEM_SECURITY.0 as u32) != 0 {
             res.push(if self.resolve_names {
                 "Add/delete auditing rules"
             } else {
@@ -592,9 +596,9 @@ impl<'a> Engine<'a> {
 
         let mut res = res.join(", ");
         if self.resolve_names {
-            if ace.get_container_inherit() {
+            if container_inherit {
                 let mut found = false;
-                if let Some(guid) = ace.get_inherited_object_type() {
+                if let Some(guid) = inherit_object_type {
                     for (class_name, class_guid) in &self.schema.class_guids {
                         if class_guid == guid {
                             res.push_str(&format!(" on all {} child objects", class_name));
@@ -607,13 +611,13 @@ impl<'a> Engine<'a> {
                     res.push_str(" on all child objects");
                 }
     
-                if !ace.get_inherit_only() {
+                if !inherit_only {
                     res.push_str(" and the container itself");
                 }
             }
         } else {
-            res.push_str(&format!(" (0x{:X})", ace.access_mask));
-            if let Some(guid) = ace.get_object_type() {
+            res.push_str(&format!(" (0x{:X})", access_mask));
+            if let Some(guid) = object_type {
                 res.push_str(&format!(" OBJECT_GUID={}", guid));
                 let mut found = false;
                 for (class_name, class_guid) in &self.schema.class_guids {
@@ -660,7 +664,7 @@ impl<'a> Engine<'a> {
                     }
                 }
             }
-            if let Some(guid) = ace.get_inherited_object_type() {
+            if let Some(guid) = inherit_object_type {
                 res.push_str(&format!(" INHERIT_OBJECT_TYPE={}", guid));
                 for (class_name, class_guid) in &self.schema.class_guids {
                     if class_guid == guid {
@@ -669,10 +673,10 @@ impl<'a> Engine<'a> {
                     }
                 }
             }
-            if ace.get_container_inherit() {
+            if container_inherit {
                 res.push_str(" [CONTAINER_INHERIT]");
             }
-            if ace.get_inherit_only() {
+            if inherit_only {
                 res.push_str(" [INHERIT_ONLY]");
             }
         }

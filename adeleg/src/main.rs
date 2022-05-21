@@ -210,7 +210,13 @@ fn main() {
                     location.to_string().as_str(),
                     engine.resolve_sid(&ace.trustee).as_str(),
                     if ace.grants_access() { "Allow ACE" } else { "Deny ACE" },
-                    engine.describe_ace(&ace).as_str(),
+                    engine.describe_ace(
+                        ace.access_mask,
+                        ace.get_object_type(),
+                        ace.get_inherited_object_type(),
+                        ace.get_container_inherit(),
+                        ace.get_inherit_only()
+                    ).as_str(),
                 ]).expect("unable to write CSV record");
             }
             for (deleg, trustee, _) in &res.delegations_found {
@@ -273,8 +279,14 @@ fn main() {
                 for ace in &res.orphan_aces {
                     println!("            {} ACE {}",
                         if ace.grants_access() { "Allow" } else { "Deny" },
-                        engine.describe_ace(&ace));
-                }
+                        engine.describe_ace(
+                            ace.access_mask,
+                            ace.get_object_type(),
+                            ace.get_inherited_object_type(),
+                            ace.get_container_inherit(),
+                            ace.get_inherit_only()
+                        ));
+                    }
                 for (delegation, _) in &res.delegations_missing {
                     println!("            Delegation missing: {}",
                         engine.describe_delegation_rights(&delegation.rights));
@@ -323,7 +335,13 @@ fn main() {
                     println!("         {} {} : {}",
                         if ace.grants_access() { "Allow" } else { "Deny" },
                         engine.resolve_sid(&ace.trustee),
-                        engine.describe_ace(&ace));
+                        engine.describe_ace(
+                            ace.access_mask,
+                            ace.get_object_type(),
+                            ace.get_inherited_object_type(),
+                            ace.get_container_inherit(),
+                            ace.get_inherit_only()
+                        ));
                 }
             }
             if res.delegations_missing.iter().any(|(d, __)| !d.builtin) {
