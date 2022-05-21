@@ -8,8 +8,8 @@ use nwg::{NativeUi, OemIcon};
 use nwd::NwgUi;
 use winldap::connection::{LdapCredentials, LdapConnection};
 use authz::{Ace, Sid};
-use crate::delegations::{DelegationLocation, Delegation};
-use crate::engine::Engine;
+use crate::delegations::{DelegationLocation, Delegation, DelegationRights};
+use crate::engine::{Engine, BUILTIN_ACES};
 use crate::error::AdelegError;
 use crate::AdelegResult;
 use crate::utils::{ends_with_case_insensitive, replace_suffix_case_insensitive};
@@ -17,6 +17,8 @@ use crate::utils::{ends_with_case_insensitive, replace_suffix_case_insensitive};
 #[derive(Default, NwgUi)]
 pub struct BasicApp {
     engine: Option<RefCell<Engine<'static>>>,
+    template_file_paths: Option<RefCell<Vec<String>>>,
+    delegation_file_paths: Option<RefCell<Vec<String>>>,
     results: Option<RefCell<HashMap<DelegationLocation, Result<AdelegResult, AdelegError>>>>,
     view_by_trustee: RefCell<bool>,
 
@@ -207,13 +209,7 @@ impl BasicApp {
             }
         }
         if warning_count > 0 {
-            let p = nwg::MessageParams {
-                title: "About ADeleg",
-                content: &format!("{} warnings were generated during analysis, switch back to Resources view to see them", warning_count),
-                buttons: nwg::MessageButtons::Ok,
-                icons: nwg::MessageIcons::Warning
-            };
-            nwg::message(&p);
+            BasicApp::show_warning(&format!("{} warnings were generated during analysis, switch back to Resources view to see them", warning_count));
         }
         self.redraw();
     }
@@ -313,28 +309,74 @@ impl BasicApp {
         self.tree_view.insert_item("Loading...", None, nwg::TreeInsert::Root);
         self.tree_view.set_enabled(false);
 
-        let engine = self.engine.as_ref().unwrap().borrow();
         {
             let mut results = self.results.as_ref().unwrap().borrow_mut();
+            let mut engine = self.engine.as_ref().unwrap().borrow_mut();
+            let templates = self.template_file_paths.as_ref().unwrap().borrow();
+            let delegations = self.delegation_file_paths.as_ref().unwrap().borrow();
+
+            engine.templates.clear();
+            engine.delegations.clear();
             results.clear();
+
+            for file_path in templates.iter() {
+                let json = match std::fs::read_to_string(file_path) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        BasicApp::show_error(&format!("Unable to read template file {} : {}", file_path, e));
+                        return;
+                    },
+                };
+                if let Err(e) = engine.load_template_json(&json) {
+                    BasicApp::show_error(&format!("Unable to parse template file {} : {}", file_path, e));
+                    return;
+                }
+            }
+            for file_path in templates.iter() {
+                let json = match std::fs::read_to_string(file_path) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        BasicApp::show_error(&format!("Unable to read delegation file {} : {}", file_path, e));
+                        return;
+                    },
+                };
+                if let Err(e) = engine.load_delegation_json(&json) {
+                    BasicApp::show_error(&format!("Unable to parse delegation file {} : {}", file_path, e));
+                    return;
+                }
+            }
+
             let new_results = match engine.run() {
                 Ok(r) => r,
                 Err(e) => {
                     self.tree_view.clear();
                     self.tree_view.insert_item("Error", None, nwg::TreeInsert::Root);
-                    let p = nwg::MessageParams {
-                        title: "Error",
-                        content: &format!("Unable to scan for delegations: {}", e),
-                        buttons: nwg::MessageButtons::Ok,
-                        icons: nwg::MessageIcons::Error
-                    };
-                    nwg::message(&p);
                     HashMap::new()
                 },
             };
             results.extend(new_results);
         }
         self.redraw();
+    }
+
+    fn show_warning(s: &str) {
+        let p = nwg::MessageParams {
+            title: "Warning",
+            content: s,
+            buttons: nwg::MessageButtons::Ok,
+            icons: nwg::MessageIcons::Warning
+        };
+        nwg::message(&p);
+    }
+
+    fn show_error(s: &str) {
+        let p = nwg::MessageParams {
+            title: "Error",
+            content: s,
+            buttons: nwg::MessageButtons::Ok,
+            icons: nwg::MessageIcons::Error
+        };
+        nwg::message(&p);
     }
 
     fn redraw(&self) {
@@ -436,29 +478,13 @@ impl BasicApp {
             return;
         }
 
-        let before = self.engine.as_ref().unwrap().borrow().templates.len();
-        let files = dialog.get_selected_items().expect("unable to fetch selected files");
-        for path in files {
-            if let Err(e) = self.engine.as_ref().unwrap().borrow_mut().register_template(&path.to_string_lossy()) {
-                let p = nwg::MessageParams {
-                    title: "Error",
-                    content: &format!("Unable to load template file: {}", e),
-                    buttons: nwg::MessageButtons::Ok,
-                    icons: nwg::MessageIcons::Warning
-                };
-                nwg::message(&p);
-                return;
-            }
-        }
-        let after = self.engine.as_ref().unwrap().borrow().templates.len();
+        let mut files: Vec<String> = dialog.get_selected_items()
+            .expect("unable to fetch selected files")
+            .iter()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
 
-        let p = nwg::MessageParams {
-            title: "Success",
-            content: &format!("{} templates loaded", after - before),
-            buttons: nwg::MessageButtons::Ok,
-            icons: nwg::MessageIcons::Info,
-        };
-        nwg::message(&p);
+        self.template_file_paths.as_ref().unwrap().borrow_mut().append(&mut files);
     }
 
     fn show_delegation_load_dialog(&self) {
@@ -475,29 +501,12 @@ impl BasicApp {
             return;
         }
 
-        let before = self.engine.as_ref().unwrap().borrow().delegations.len();
-        let files = dialog.get_selected_items().expect("unable to fetch selected files");
-        for path in files {
-            if let Err(e) = self.engine.as_ref().unwrap().borrow_mut().register_delegation(&path.to_string_lossy()) {
-                let p = nwg::MessageParams {
-                    title: "Error",
-                    content: &format!("Unable to load delegation file: {}", e),
-                    buttons: nwg::MessageButtons::Ok,
-                    icons: nwg::MessageIcons::Warning
-                };
-                nwg::message(&p);
-                return;
-            }
-        }
-        let after = self.engine.as_ref().unwrap().borrow().delegations.len();
-
-        let p = nwg::MessageParams {
-            title: "Success",
-            content: &format!("{} delegations loaded", after - before),
-            buttons: nwg::MessageButtons::Ok,
-            icons: nwg::MessageIcons::Info,
-        };
-        nwg::message(&p);
+        let mut files: Vec<String> = dialog.get_selected_items()
+            .expect("unable to fetch selected files")
+            .iter()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+        self.delegation_file_paths.as_ref().unwrap().borrow_mut().append(&mut files);
         self.refresh();
     }
 
@@ -558,7 +567,7 @@ impl BasicApp {
                         self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 1,
-                            text: Some(delegation.template_name.clone()),
+                            text: Some(engine.describe_delegation_rights(&delegation.rights)),
                             image: None,
                         });
                     }
@@ -575,7 +584,7 @@ impl BasicApp {
                         self.list_deleg_found.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 1,
-                            text: Some(delegation.template_name.clone()),
+                            text: Some(engine.describe_delegation_rights(&delegation.rights)),
                             image: None,
                         });
                     }
@@ -616,7 +625,7 @@ impl BasicApp {
                     self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 1,
-                        text: Some(delegation.template_name.clone()),
+                        text: Some(engine.describe_delegation_rights(&delegation.rights)),
                         image: None,
                     });
                 }
@@ -630,7 +639,7 @@ impl BasicApp {
                     self.list_deleg_found.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 1,
-                        text: Some(delegation.template_name.clone()),
+                        text: Some(engine.describe_delegation_rights(&delegation.rights)),
                         image: None,
                     });
                 }
@@ -732,13 +741,7 @@ impl ConnectionDialog {
                 (Some(dc_hostname), None)
             } else {
                 if domain.is_empty() || username.is_empty() {
-                    let p = nwg::MessageParams {
-                        title: "Invalid parameters",
-                        content: "When specifying an explicit username or domain, both must be specified",
-                        buttons: nwg::MessageButtons::Ok,
-                        icons: nwg::MessageIcons::Warning
-                    };
-                    nwg::message(&p);
+                    BasicApp::show_error("Invalid parameters: when specifying an explicit username or domain, both must be specified");
                     return;
                 }
                 (Some(dc_hostname), Some(LdapCredentials {
@@ -754,19 +757,17 @@ impl ConnectionDialog {
         let ldap = match LdapConnection::new(server.as_deref(), dc_port, credentials.as_ref()) {
             Ok(conn) => conn,
             Err(e) => {
-                let p = nwg::MessageParams {
-                    title: "Connection error",
-                    content: &format!("Unable to connect: {}", e),
-                    buttons: nwg::MessageButtons::Ok,
-                    icons: nwg::MessageIcons::Warning
-                };
-                nwg::message(&p);
+                BasicApp::show_error(&format!("Unable to connect: {}", e));
                 return;
             }
         };
 
         self.window.set_visible(false);
-        let engine = RefCell::new(Engine::new(Box::leak(Box::new(ldap)), true));
+        let mut engine = RefCell::new(Engine::new(Box::leak(Box::new(ldap)), true));
+        if let Err(e) = engine.borrow_mut().load_delegation_json(BUILTIN_ACES) {
+            BasicApp::show_error(&format!("Unable to parse builtin delegations: {}", e));
+            std::process::exit(1);
+        }
         let results = RefCell::new(HashMap::new());
         let _app = BasicApp::build_ui(BasicApp { engine: Some(engine), results: Some(results), ..Default::default() }).expect("Failed to build UI");
         nwg::dispatch_thread_events();

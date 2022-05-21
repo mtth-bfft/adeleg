@@ -8,10 +8,12 @@ use winldap::utils::{get_attr_strs, get_attr_str};
 use winldap::search::{LdapSearch, LdapEntry};
 use winldap::error::LdapError;
 use winldap::control::{BerVal, BerEncodable, LdapControl};
-use crate::delegations::{Delegation, DelegationTemplate, DelegationLocation};
+use crate::delegations::{Delegation, DelegationTemplate, DelegationLocation, DelegationAce, DelegationRights};
 use crate::error::AdelegError;
 use crate::utils::{Domain, find_ace_positions, get_ace_derived_by_inheritance_from_schema, get_domains, get_attr_sid, get_attr_sd, ends_with_case_insensitive, capitalize};
 use crate::schema::Schema;
+
+pub const BUILTIN_ACES: &str = include_str!("..\\builtin_delegations.json");
 
 pub const IGNORED_ACCESS_RIGHTS: u32 = (ADS_RIGHT_READ_CONTROL.0 |
     ADS_RIGHT_ACTRL_DS_LIST.0 |
@@ -20,14 +22,8 @@ pub const IGNORED_ACCESS_RIGHTS: u32 = (ADS_RIGHT_READ_CONTROL.0 |
 
 pub const IGNORED_CONTROL_ACCESSES: &[&str] = &[
     "apply group policy", // applying a group policy does not mean we control it
-    "send to", // sending email to people does not mean we control them
-    "change password", // changing password requires knowing the current password, and if you know the password you control the user
-    "query self quota", // if an attacker can impersonate a user, querying their quota is the least of their worries
-    "open address list", // listing address books is not a control path
     "allow a dc to create a clone of itself", // if an attacker can impersonate a DC, cloning to a new DC is the least of your worries
-    "enumerate entire sam domain", // user enumeration is allowed to everyone by default
 ];
-
 pub(crate) struct Engine<'a> {
     ldap: &'a LdapConnection,
     pub(crate) domains: Vec<Domain>,
@@ -115,18 +111,14 @@ impl<'a> Engine<'a> {
         }
     }
 
-    pub fn register_template(&mut self, template_path: &str) -> Result<(), String> {
-        let json = match std::fs::read_to_string(template_path) {
-            Ok(f) => f,
-            Err(e) => return Err(format!("Unable to open file {} : {}", template_path, e)),
-        };
+    pub fn load_template_json(&mut self, json: &str) -> Result<(), String> {
         let json = json.trim();
         if json.is_empty() {
             return Ok(()); // empty file are invalid JSON, just skip them
         }
         let templates = match DelegationTemplate::from_json(&json, &self.schema) {
             Ok(v) => v,
-            Err(e) => return Err(format!("Unable to parse template file {} : {}", template_path, e)),
+            Err(e) => return Err(format!("Unable to parse template: {}", e)),
         };
         for template in templates.into_iter() {
             self.templates.insert(template.name.to_owned(), template);
@@ -134,18 +126,14 @@ impl<'a> Engine<'a> {
         Ok(())
     }
 
-    pub fn register_delegation(&mut self, delegation_path: &str) -> Result<(), String> {
-        let json = match std::fs::read_to_string(delegation_path) {
-            Ok(f) => f,
-            Err(e) => return Err(format!("Unable to open file {} : {}", delegation_path, e)),
-        };
+    pub fn load_delegation_json(&mut self, json: &str) -> Result<(), String> {
         let json = json.trim();
         if json.is_empty() {
             return Ok(()); // empty file are invalid JSON, just skip them
         }
-        let mut delegations = match Delegation::from_json(&json, &self.templates) {
+        let mut delegations = match Delegation::from_json(&json, &self.templates, &self.schema) {
             Ok(v) => v,
-            Err(e) => return Err(format!("Unable to parse delegation file {} : {}", delegation_path, e)),
+            Err(e) => return Err(format!("Unable to parse delegation file: {}", e)),
         };
         self.delegations.append(&mut delegations);
         Ok(())
@@ -442,6 +430,17 @@ impl<'a> Engine<'a> {
         }
 
         Ok(res)
+    }
+
+    pub fn describe_delegation_rights(&self, delegation_rights: &DelegationRights) -> String {
+        match delegation_rights {
+            DelegationRights::Ace(ace) => {
+                // FIXME
+                format!("{:?}", ace)
+            },
+            DelegationRights::TemplateName { template } => template.clone(),
+            DelegationRights::Template(template) => template.name.clone(),
+        }
     }
 
     // Describe this ACE access rights as a string, without mentionning the trustee or the location

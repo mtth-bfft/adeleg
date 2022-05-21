@@ -1,0 +1,973 @@
+[
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "dn": "DC=ForestDnsZones,DC=*" },
+        "access_mask": 8,
+        "object_type": "Validated write to computer attributes.",
+        "container_inherit": true,
+        "inherit_only": true,
+        "inherited_object_type": "computer",
+        "builtin": true
+    },
+    {
+        "trustee": { "sam_account_name": "DnsAdmins" },
+        "resource": { "dn": "CN=MicrosoftDNS,DC=DomainDnsZones,DC=*" },
+        "access_mask": 983423,
+        "container_inherit": true,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "dn": "DC=DomainDnsZones,DC=*" },
+        "access_mask": 8,
+        "object_type": "Validated write to computer attributes.",
+        "container_inherit": true,
+        "inherit_only": true,
+        "inherited_object_type": "computer",
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 520 },
+        "resource": { "dn": "CN=WMIGPO,CN=WMIPolicy,CN=System,DC=*" },
+        "access_mask": 1,
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 520 },
+        "resource": { "dn": "CN=SOM,CN=WMIPolicy,CN=System,DC=*" },
+        "access_mask": 131261,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "dn": "CN=SOM,CN=WMIPolicy,CN=System,DC=*" },
+        "access_mask": 983551,
+        "container_inherit": true,
+        "inherit_only": true,
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 520 },
+        "resource": { "dn": "CN=PolicyType,CN=WMIPolicy,CN=System,DC=*" },
+        "access_mask": 1,
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 520 },
+        "resource": { "dn": "CN=PolicyTemplate,CN=WMIPolicy,CN=System,DC=*" },
+        "access_mask": 1,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "dn": "CN=WMIPolicy,CN=System,DC=*" },
+        "access_mask": 983551,
+        "container_inherit": true,
+        "inherit_only": true,
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 520 },
+        "resource": { "dn": "CN=WMIPolicy,CN=System,DC=*" },
+        "access_mask": 131261,
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 553 },
+        "resource": { "dn": "CN=RAS and IAS Servers Access Check,CN=System,DC=*" },
+        "access_mask": 983487,
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 520 },
+        "resource": { "dn": "CN=Policies,CN=System,DC=*" },
+        "access_mask": 1,
+        "builtin": true
+    },
+    {
+        "trustee": { "sam_account_name": "DnsAdmins" },
+        "resource": { "dn": "CN=MicrosoftDNS,CN=System,DC=*" },
+        "container_inherit": true,
+        "access_mask": 983423,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-32-561" },
+        "resource": { "dn": "CN=AdminSDHolder,CN=System,DC=*" },
+        "access_mask": 48,
+        "object_type": "Terminal Server License Server",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-32-561" },
+        "resource": { "dn": "CN=AdminSDHolder,CN=System,DC=*" },
+        "access_mask": 48,
+        "object_type": "terminalServer",
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 517 },
+        "resource": { "dn": "CN=AdminSDHolder,CN=System,DC=*" },
+        "access_mask": 48,
+        "object_type": "userCertificate",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-1-0" },
+        "resource": { "dn": "CN=AdminSDHolder,CN=System,DC=*" },
+        "access_mask": 256,
+        "object_type": "Change Password",
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 526 },
+        "resource": { "dn": "CN=Keys,DC=*" },
+        "container_inherit": true,
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "root_domain_rid": 527 },
+        "resource": { "dn": "CN=Keys,DC=*" },
+        "container_inherit": true,
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "root_domain_rid": 498 },
+        "resource": { "dn": "CN=Sites,CN=Configuration,DC=*" },
+        "container_inherit": true,
+        "inherit_only": true,
+        "access_mask": 8,
+        "object_type": "msDS-Behavior-Version",
+        "inherited_object_type": "nTDSDSA",
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 517 },
+        "resource": { "dn": "CN=AIA,CN=Public Key Services,CN=Services,CN=Configuration,DC=*" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "root_domain_rid": 498 },
+        "resource": { "dn": "CN=Schema,CN=Configuration,DC=*" },
+        "access_mask": 256,
+        "object_type": "Replicating Directory Changes",
+        "builtin": true
+    },
+    {
+        "trustee": { "root_domain_rid": 498 },
+        "resource": { "dn": "CN=Schema,CN=Configuration,DC=*" },
+        "access_mask": 256,
+        "object_type": "Replicating Directory Changes All",
+        "builtin": true
+    },
+    {
+        "trustee": { "root_domain_rid": 498 },
+        "resource": { "dn": "CN=Schema,CN=Configuration,DC=*" },
+        "access_mask": 256,
+        "object_type": "Replicating Directory Changes In Filtered Set",
+        "builtin": true
+    },
+    {
+        "trustee": { "root_domain_rid": 498 },
+        "resource": { "dn": "CN=Configuration,DC=*" },
+        "access_mask": 256,
+        "object_type": "Replicating Directory Changes",
+        "builtin": true
+    },
+    {
+        "trustee": { "root_domain_rid": 498 },
+        "resource": { "dn": "CN=Builtin,DC=*" },
+        "access_mask": 256,
+        "object_type": "Replicating Directory Changes",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "dn": "CN=Builtin,DC=*" },
+        "access_mask": 8,
+        "object_type": "Validated write to computer attributes.",
+        "container_inherit": true,
+        "inherit_only": true,
+        "inherited_object_type": "computer",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "dn": "CN=Builtin,DC=*" },
+        "access_mask": 256,
+        "object_type": "Update Password Not Required Bit",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "dn": "CN=Builtin,DC=*" },
+        "access_mask": 256,
+        "object_type": "Unexpire Password",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "dn": "CN=Builtin,DC=*" },
+        "access_mask": 256,
+        "object_type": "Enable Per User Reversibly Encrypted Password",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-32-557" },
+        "resource": { "dn": "CN=Builtin,DC=*" },
+        "access_mask": 256,
+        "object_type": "Create Inbound Forest Trust",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "dn": "DC=*" },
+        "access_mask": 8,
+        "object_type": "Validated write to computer attributes.",
+        "container_inherit": true,
+        "inherit_only": true,
+        "inherited_object_type": "computer",
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 526 },
+        "resource": { "dn": "DC=*" },
+        "container_inherit": true,
+        "access_mask": 48,
+        "object_type": "msDS-KeyCredentialLink",
+        "builtin": true
+    },
+    {
+        "trustee": { "root_domain_rid": 527 },
+        "resource": { "dn": "DC=*" },
+        "container_inherit": true,
+        "access_mask": 48,
+        "object_type": "msDS-KeyCredentialLink",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-32-561" },
+        "resource": { "default_security_descriptor": "user" },
+        "access_mask": 48,
+        "object_type": "Terminal Server License Server",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-32-561" },
+        "resource": { "default_security_descriptor": "user" },
+        "access_mask": 48,
+        "object_type": "terminalServer",
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 517 },
+        "resource": { "default_security_descriptor": "user" },
+        "access_mask": 48,
+        "object_type": "userCertificate",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-1-0" },
+        "resource": { "default_security_descriptor": "user" },
+        "access_mask": 256,
+        "object_type": "Change Password",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "trustedDomain" },
+        "access_mask": 65536,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "trustedDomain" },
+        "access_mask": 32,
+        "object_type": "736E4812-AF31-11D2-B7DF-00805F48CAEB",
+        "inherited_object_type": "trustedDomain",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "serviceConnectionPoint" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "samServer" },
+        "access_mask": 256,
+        "object_type": "Enumerate Entire SAM Domain",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-32-554" },
+        "resource": { "default_security_descriptor": "samServer" },
+        "access_mask": 256,
+        "object_type": "Enumerate Entire SAM Domain",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "samDomain" },
+        "access_mask": 8,
+        "object_type": "Validated write to computer attributes.",
+        "container_inherit": true,
+        "inherit_only": true,
+        "inherited_object_type": "computer",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "samDomain" },
+        "access_mask": 256,
+        "object_type": "Enable Per User Reversibly Encrypted Password",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "samDomain" },
+        "access_mask": 256,
+        "object_type": "Unexpire Password",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "samDomain" },
+        "access_mask": 256,
+        "object_type": "Update Password Not Required Bit",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-32-557" },
+        "resource": { "default_security_descriptor": "samDomain" },
+        "access_mask": 256,
+        "object_type": "Create Inbound Forest Trust",
+        "builtin": true
+    },
+    {
+        "trustee": { "root_domain_rid": 498 },
+        "resource": { "default_security_descriptor": "samDomain" },
+        "access_mask": 256,
+        "object_type": "Replicating Directory Changes",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "remoteStorageServicePoint" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "rRASAdministrationDictionary" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "rRASAdministrationConnectionPoint" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "remoteMailRecipient" },
+        "access_mask": 256,
+        "object_type": "Send To",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "printQueue" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "nTFRSSubscriptions" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "nTFRSSubscriber" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "nTFRSSettings" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "nTFRSReplicaSet" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "nTFRSMember" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-OptionalFeature" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-AzTask" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-AzScope" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-AzRole" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-AzOperation" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-AzApplication" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-AzAdminManager" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDFSR-Topology" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDFSR-Subscription" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDFSR-Subscriber" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDFSR-ReplicationGroup" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDFSR-Member" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDFSR-LocalSettings" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDFSR-GlobalSettings" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDFSR-ContentSet" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDFSR-Content" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDFSR-Connection" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDFS-NamespaceAnchor" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "fTDfs" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "dnsZoneScopeContainer" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "dnsZoneScope" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "dnsZone" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "dnsNode" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 520 },
+        "resource": { "default_security_descriptor": "msWMI-WMIGPO" },
+        "access_mask": 1,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "msWMI-UintSetParam" },
+        "access_mask": 131287,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "msWMI-StringSetParam" },
+        "access_mask": 131287,
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 520 },
+        "resource": { "default_security_descriptor": "msWMI-Som" },
+        "access_mask": 1,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "msWMI-SimplePolicyTemplate" },
+        "access_mask": 131287,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "msWMI-RangeParam" },
+        "access_mask": 131287,
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 520 },
+        "resource": { "default_security_descriptor": "msWMI-PolicyType" },
+        "access_mask": 1,
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 520 },
+        "resource": { "default_security_descriptor": "msWMI-PolicyTemplate" },
+        "access_mask": 1,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "msWMI-MergeablePolicyTemplate" },
+        "access_mask": 131287,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "msWMI-IntSetParam" },
+        "access_mask": 131287,
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 515 },
+        "resource": { "default_security_descriptor": "msTPM-InformationObjectsContainer" },
+        "access_mask": 149,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msTPM-InformationObject" },
+        "access_mask": 32,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-ManagedServiceAccount" },
+        "access_mask": 197076,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-ManagedServiceAccount" },
+        "access_mask": 32,
+        "object_type": "Account Restrictions",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-ManagedServiceAccount" },
+        "access_mask": 8,
+        "object_type": "dNSHostName",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-ManagedServiceAccount" },
+        "access_mask": 8,
+        "object_type": "servicePrincipalName",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-ManagedServiceAccount" },
+        "access_mask": 32,
+        "object_type": "sAMAccountName",
+        "inherited_object_type": "computer",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-ManagedServiceAccount" },
+        "access_mask": 32,
+        "object_type": "Logon Information",
+        "inherited_object_type": "computer",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-ManagedServiceAccount" },
+        "access_mask": 32,
+        "object_type": "description",
+        "inherited_object_type": "computer",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-ManagedServiceAccount" },
+        "access_mask": 32,
+        "object_type": "displayName",
+        "inherited_object_type": "computer",
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 517 },
+        "resource": { "default_security_descriptor": "msDS-ManagedServiceAccount" },
+        "access_mask": 48,
+        "object_type": "userCertificate",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-1-0" },
+        "resource": { "default_security_descriptor": "msDS-ManagedServiceAccount" },
+        "access_mask": 256,
+        "object_type": "Change Password",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-GroupManagedServiceAccount" },
+        "access_mask": 197076,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-GroupManagedServiceAccount" },
+        "access_mask": 32,
+        "object_type": "Account Restrictions",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-GroupManagedServiceAccount" },
+        "access_mask": 8,
+        "object_type": "dNSHostName",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-GroupManagedServiceAccount" },
+        "access_mask": 8,
+        "object_type": "servicePrincipalName",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-GroupManagedServiceAccount" },
+        "access_mask": 32,
+        "object_type": "sAMAccountName",
+        "inherited_object_type": "computer",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-GroupManagedServiceAccount" },
+        "access_mask": 32,
+        "object_type": "Logon Information",
+        "inherited_object_type": "computer",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-GroupManagedServiceAccount" },
+        "access_mask": 32,
+        "object_type": "description",
+        "inherited_object_type": "computer",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "msDS-GroupManagedServiceAccount" },
+        "access_mask": 32,
+        "object_type": "displayName",
+        "inherited_object_type": "computer",
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 517 },
+        "resource": { "default_security_descriptor": "msDS-GroupManagedServiceAccount" },
+        "access_mask": 48,
+        "object_type": "userCertificate",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-1-0" },
+        "resource": { "default_security_descriptor": "msDS-QuotaContainer" },
+        "access_mask": 256,
+        "object_type": "Query Self Quota",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "computer" },
+        "access_mask": 197076,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "computer" },
+        "access_mask": 32,
+        "object_type": "Account Restrictions",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "computer" },
+        "access_mask": 8,
+        "object_type": "dNSHostName",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "computer" },
+        "access_mask": 8,
+        "object_type": "servicePrincipalName",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "computer" },
+        "access_mask": 32,
+        "object_type": "sAMAccountName",
+        "inherited_object_type": "computer",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "computer" },
+        "access_mask": 32,
+        "object_type": "Logon Information",
+        "inherited_object_type": "computer",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "computer" },
+        "access_mask": 32,
+        "object_type": "description",
+        "inherited_object_type": "computer",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "computer" },
+        "access_mask": 32,
+        "object_type": "displayName",
+        "inherited_object_type": "computer",
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 517 },
+        "resource": { "default_security_descriptor": "computer" },
+        "access_mask": 48,
+        "object_type": "userCertificate",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-1-0" },
+        "resource": { "default_security_descriptor": "computer" },
+        "access_mask": 256,
+        "object_type": "Change Password",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "intellimirrorGroup" },
+        "access_mask": 3,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-32-561" },
+        "resource": { "default_security_descriptor": "inetOrgPerson" },
+        "access_mask": 48,
+        "object_type": "Terminal Server License Server",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-32-561" },
+        "resource": { "default_security_descriptor": "inetOrgPerson" },
+        "access_mask": 48,
+        "object_type": "terminalServer",
+        "builtin": true
+    },
+    {
+        "trustee": { "domain_rid": 517 },
+        "resource": { "default_security_descriptor": "inetOrgPerson" },
+        "access_mask": 48,
+        "object_type": "userCertificate",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-1-0" },
+        "resource": { "default_security_descriptor": "inetOrgPerson" },
+        "access_mask": 256,
+        "object_type": "Change Password",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "groupPolicyContainer" },
+        "container_inherit": true,
+        "access_mask": 983295,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "group" },
+        "access_mask": 256,
+        "object_type": "Send To",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-1-0" },
+        "resource": { "default_security_descriptor": "foreignSecurityPrincipal" },
+        "access_mask": 256,
+        "object_type": "Change Password",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-3-0" },
+        "resource": { "default_security_descriptor": "domainDNS" },
+        "container_inherit": true,
+        "inherit_only": true,
+        "inherited_object_type": "computer",
+        "access_mask": 8,
+        "object_type": "Validated write to computer attributes.",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "domainDNS" },
+        "access_mask": 256,
+        "object_type": "Enable Per User Reversibly Encrypted Password",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "domainDNS" },
+        "access_mask": 256,
+        "object_type": "Unexpire Password",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "domainDNS" },
+        "access_mask": 256,
+        "object_type": "Update Password Not Required Bit",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-32-557" },
+        "resource": { "default_security_descriptor": "domainDNS" },
+        "access_mask": 256,
+        "object_type": "Create Inbound Forest Trust",
+        "builtin": true
+    },
+    {
+        "trustee": { "root_domain_rid": 498 },
+        "resource": { "default_security_descriptor": "domainDNS" },
+        "access_mask": 256,
+        "object_type": "Replicating Directory Changes",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "dnsZoneScopeContainer" },
+        "access_mask": 1,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "dnsZoneScope" },
+        "access_mask": 1,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "dnsZone" },
+        "access_mask": 1,
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-5-11" },
+        "resource": { "default_security_descriptor": "addressBookContainer" },
+        "access_mask": 256,
+        "object_type": "Open Address List",
+        "builtin": true
+    }
+]

@@ -90,6 +90,10 @@ fn main() {
                 .help("Format output as CSV")
                 .long("csv")
         ).arg(
+            Arg::new("show_builtin")
+            .help("Include built-in delegations in the output")
+            .long("show-builtin")
+        ).arg(
             Arg::new("view_raw")
                 .help("View unresolved ACE contents")
                 .long("view-raw")
@@ -128,11 +132,19 @@ fn main() {
     };
 
     let mut engine = Engine::new(&conn, !args.is_present("view_raw"));
+    engine.load_delegation_json(engine::BUILTIN_ACES).expect("unable to parse builtin delegations");
 
     if let Some(input_filepaths) = args.values_of("templates") {
         for input_filepath in input_filepaths.into_iter() {
-            if let Err(e) = engine.register_template(input_filepath) {
-                eprintln!("{}", e);
+            let json = match std::fs::read_to_string(input_filepath) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!(" [!] Unable to open template file {} : {}", input_filepath, e);
+                    std::process::exit(1);
+                }
+            };
+            if let Err(e) = engine.load_template_json(&json) {
+                eprintln!(" [!] Unable to parse template file {} : {}", input_filepath, e);
                 std::process::exit(1);
             }
         }
@@ -140,8 +152,15 @@ fn main() {
 
     if let Some(input_files) = args.values_of("delegations") {
         for input_filepath in input_files.into_iter() {
-            if let Err(e) = engine.register_delegation(input_filepath) {
-                eprintln!("{}", e);
+            let json = match std::fs::read_to_string(input_filepath) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!(" [!] Unable to open delegation file {} : {}", input_filepath, e);
+                    std::process::exit(1);
+                }
+            };
+            if let Err(e) = engine.load_delegation_json(&json) {
+                eprintln!(" [!] Unable to parse delegation file {} : {}", input_filepath, e);
                 std::process::exit(1);
             }
         }
@@ -183,7 +202,7 @@ fn main() {
                     location.to_string().as_str(),
                     engine.resolve_sid(&trustee).as_str(),
                     "Delegation (missing!)",
-                    deleg.template_name.as_str(),
+                    engine.describe_delegation_rights(&deleg.rights).as_str(),
                 ]).expect("unable to write CSV record");
             }
             for ace in &res.orphan_aces {
@@ -199,7 +218,7 @@ fn main() {
                     location.to_string().as_str(),
                     engine.resolve_sid(&trustee).as_str(),
                     "Delegation",
-                    deleg.template_name.as_str(),
+                    engine.describe_delegation_rights(&deleg.rights).as_str(),
                 ]).expect("unable to write CSV record");
             }
         }
@@ -258,11 +277,14 @@ fn main() {
                 }
                 for (delegation, _) in &res.delegations_missing {
                     println!("            Delegation missing: {}",
-                        delegation.template_name);
+                        engine.describe_delegation_rights(&delegation.rights));
                 }
                 for (delegation, _, _) in &res.delegations_found {
+                    if !args.is_present("show_builtin") && delegation.builtin {
+                        continue;
+                    }
                     println!("            Documented delegation: {}",
-                        delegation.template_name);
+                        engine.describe_delegation_rights(&delegation.rights));
                 }
             }
         }
@@ -273,6 +295,16 @@ fn main() {
         let mut res: Vec<(&DelegationLocation, &Result<AdelegResult, AdelegError>)> = res.iter().collect();
         res.sort_by(|(loc_a, _), (loc_b, _)| loc_a.cmp(loc_b));
         for (location, res) in res {
+            if let Ok(res) = &res {
+                if res.non_canonical_ace.is_none() &&
+                    res.orphan_aces.is_empty() &&
+                    res.delegations_missing.iter().all(|(d, __)| d.builtin) &&
+                    res.delegations_found.iter().all(|(d, _, _)| d.builtin) &&
+                    (res.delegations_found.is_empty() || !args.is_present("show_builtin")) {
+                    continue;
+                }
+            }
+
             println!("\n=== {}", &location);
             let res = match res {
                 Ok(r) => r,
@@ -294,16 +326,25 @@ fn main() {
                         engine.describe_ace(&ace));
                 }
             }
-            if !res.delegations_missing.is_empty() {
+            if res.delegations_missing.iter().any(|(d, __)| !d.builtin) {
                 println!("       Delegations missing:");
                 for (delegation, trustee) in &res.delegations_missing {
-                    println!("         {} : {}", engine.resolve_sid(&trustee), delegation.template_name);
+                    if delegation.builtin {
+                        continue;
+                    }
+                    println!("         {} : {}", engine.resolve_sid(&trustee),
+                        engine.describe_delegation_rights(&delegation.rights));
                 }
             }
-            if !res.delegations_found.is_empty() {
+            if res.delegations_found.iter().any(|(d, _, _)| !d.builtin) ||
+                    (!res.delegations_found.is_empty() && args.is_present("show_builtin")) {
                 println!("       Documented delegations:");
                 for (delegation, trustee, aces) in &res.delegations_found {
-                    println!("         {} : {}", engine.resolve_sid(&trustee), delegation.template_name);
+                    if !args.is_present("show_builtin") && delegation.builtin {
+                        continue;
+                    }
+                    println!("         {} : {}", engine.resolve_sid(&trustee),
+                        engine.describe_delegation_rights(&delegation.rights));
                 }
             }
         }
