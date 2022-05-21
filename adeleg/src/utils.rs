@@ -1,5 +1,5 @@
 use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_DS_DELETE_CHILD, ADS_RIGHT_ACTRL_DS_LIST, ADS_RIGHT_DS_SELF, ADS_RIGHT_DS_READ_PROP, ADS_RIGHT_DS_WRITE_PROP, ADS_RIGHT_DS_DELETE_TREE, ADS_RIGHT_DS_LIST_OBJECT, ADS_RIGHT_DS_CONTROL_ACCESS, ADS_RIGHT_DELETE, ADS_RIGHT_READ_CONTROL, ADS_RIGHT_WRITE_DAC, ADS_RIGHT_WRITE_OWNER, ADS_RIGHT_SYNCHRONIZE, ADS_RIGHT_ACCESS_SYSTEM_SECURITY, ADS_RIGHT_GENERIC_READ, ADS_RIGHT_GENERIC_WRITE, ADS_RIGHT_GENERIC_EXECUTE, ADS_RIGHT_GENERIC_ALL, ADS_RIGHT_DS_CREATE_CHILD};
-use windows::Win32::Security::{CONTAINER_INHERIT_ACE, NO_PROPAGATE_INHERIT_ACE, OBJECT_INHERIT_ACE};
+use windows::Win32::Security::{CONTAINER_INHERIT_ACE, NO_PROPAGATE_INHERIT_ACE, OBJECT_INHERIT_ACE, INHERIT_ONLY_ACE};
 use windows::Win32::Networking::Ldap::{LDAP_SCOPE_BASE, LDAP_SCOPE_SUBTREE, LDAP_SCOPE_ONELEVEL};
 use core::borrow::Borrow;
 use authz::{Ace, Sid, SecurityDescriptor, Guid};
@@ -129,24 +129,34 @@ pub(crate) fn get_ace_derived_by_inheritance_from_schema(parent_aces: &[Ace], ch
                 continue;
             }
         }
-        // Creator Owner SID gets replaced by the current owner
-        let trustee = if parent_ace.trustee == Sid::try_from("S-1-3-0").unwrap() {
-            child_owner
-        } else {
-            &parent_ace.trustee
-        }.to_owned();
 
         let mut flags = parent_ace.flags;
         if (parent_ace.flags & NO_PROPAGATE_INHERIT_ACE.0 as u8) != 0 {
             flags &= !(CONTAINER_INHERIT_ACE.0 as u8 | OBJECT_INHERIT_ACE.0 as u8);
         }
 
-        res.push(Ace {
-            trustee,
-            access_mask: parent_ace.access_mask,
-            flags,
-            type_specific: parent_ace.type_specific.clone(),
-        })
+        // Creator Owner SID gets replaced by the current owner
+        if parent_ace.trustee == Sid::try_from("S-1-3-0").unwrap() {
+            res.push(Ace {
+                trustee: child_owner.clone(),
+                access_mask: parent_ace.access_mask,
+                flags: flags & !(CONTAINER_INHERIT_ACE.0 as u8 | OBJECT_INHERIT_ACE.0 as u8),
+                type_specific: parent_ace.type_specific.clone(),
+            });
+            res.push(Ace {
+                trustee: parent_ace.trustee.clone(),
+                access_mask: parent_ace.access_mask,
+                flags: flags | (INHERIT_ONLY_ACE.0 as u8),
+                type_specific: parent_ace.type_specific.clone(),
+            });
+        } else {
+            res.push(Ace {
+                trustee: parent_ace.trustee.clone(),
+                access_mask: parent_ace.access_mask,
+                flags,
+                type_specific: parent_ace.type_specific.clone(),
+            });
+        }
     }
     res
 }
