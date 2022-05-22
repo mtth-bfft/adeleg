@@ -45,6 +45,24 @@ pub struct AdelegResult {
     pub(crate) delegations_missing: Vec<(Delegation, Sid)>,
 }
 
+impl AdelegResult {
+    pub(crate) fn needs_to_be_displayed(&self, view_builtin_delegations: bool) -> bool {
+        if self.non_canonical_ace.is_some() {
+            return true;
+        }
+        if !self.orphan_aces.is_empty() {
+            return true;
+        }
+        if self.delegations_found.iter().any(|(d, _, _)| !d.builtin) || (!self.delegations_found.is_empty() && view_builtin_delegations) {
+            return true;
+        }
+        if self.delegations_missing.iter().any(|(d, _)| !d.builtin) {
+            return true;
+        }
+        false
+    }
+}
+
 impl<'a> Engine<'a> {
     pub fn new(ldap: &'a LdapConnection, resolve_names: bool) -> Self {
         let domains = match get_domains(&ldap) {
@@ -601,14 +619,14 @@ impl<'a> Engine<'a> {
                 if let Some(guid) = inherit_object_type {
                     for (class_name, class_guid) in &self.schema.class_guids {
                         if class_guid == guid {
-                            res.push_str(&format!(" on all {} child objects", class_name));
+                            res.push_str(&format!(", on all {} child objects", class_name));
                             found = true;
                             break;
                         }
                     }
                 }
                 if !found {
-                    res.push_str(" on all child objects");
+                    res.push_str(", on all child objects");
                 }
     
                 if !inherit_only {

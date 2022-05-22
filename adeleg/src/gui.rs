@@ -17,10 +17,12 @@ use crate::utils::{ends_with_case_insensitive, replace_suffix_case_insensitive};
 #[derive(Default, NwgUi)]
 pub struct BasicApp {
     engine: Option<RefCell<Engine<'static>>>,
-    template_file_paths: Option<RefCell<Vec<String>>>,
-    delegation_file_paths: Option<RefCell<Vec<String>>>,
-    results: Option<RefCell<HashMap<DelegationLocation, Result<AdelegResult, AdelegError>>>>,
+    template_file_paths: RefCell<Vec<String>>,
+    delegation_file_paths: RefCell<Vec<String>>,
     view_by_trustee: RefCell<bool>,
+    view_builtin_delegations: RefCell<bool>,
+    hide_unreadable_warnings: RefCell<bool>,
+    results: Option<RefCell<HashMap<DelegationLocation, Result<AdelegResult, AdelegError>>>>,
 
     #[nwg_control(maximized: true, title: "ADeleg", flags: "MAIN_WINDOW|VISIBLE")]
     #[nwg_events(
@@ -54,6 +56,14 @@ pub struct BasicApp {
     #[nwg_events( OnMenuItemSelected: [BasicApp::refresh] )]
     menu_item_refresh: nwg::MenuItem,
 
+    #[nwg_control(parent: menu_view, text: "View built-in delegations")]
+    #[nwg_events( OnMenuItemSelected: [BasicApp::toggle_view_builtin_delegations] )]
+    menu_view_builtin_delegations: nwg::MenuItem,
+
+    #[nwg_control(parent: menu_view, text: "View unreadable entries as warnings")]
+    #[nwg_events( OnMenuItemSelected: [BasicApp::toggle_view_unreadable_warnings] )]
+    menu_view_unreadable_warnings: nwg::MenuItem,
+
     #[nwg_control(parent: menu_view, text: "Index view by...")]
     menu_view_index_by: nwg::Menu,
 
@@ -76,15 +86,7 @@ pub struct BasicApp {
     #[nwg_events( OnMenuItemSelected: [BasicApp::online_help] )]
     menu_help_online: nwg::MenuItem,
 
-    #[nwg_layout(parent: window, flex_direction: FlexDirection::Column, flex_wrap: FlexWrap::Wrap, overflow: Overflow::Scroll, padding: Rect {
-        start: Dimension::Points(5.0),
-        end: Dimension::Points(5.0),
-        top: Dimension::Points(5.0),
-        bottom: Dimension::Points(5.0),
-    })]
-    flex: nwg::FlexboxLayout,
-
-    #[nwg_layout(parent: window, max_column: Some(3), margin: [0, 0, 0, 0], spacing: 0)]
+    #[nwg_layout(parent: window)]
     grid: nwg::GridLayout,
 
     #[nwg_control(parent: window, focus: true)]
@@ -92,73 +94,23 @@ pub struct BasicApp {
     #[nwg_events(OnTreeItemSelectionChanged: [BasicApp::handle_treeview_select])]
     tree_view: nwg::TreeView,
 
-    #[nwg_control(parent: window)]
-    #[nwg_layout_item(layout: flex, margin: Rect{
-        start: Dimension::Percent(0.333333333),
-        end: Dimension::Points(0.0),
-        top: Dimension::Points(0.0),
-        bottom: Dimension::Points(0.0),
-    })]
-    warning_text: nwg::RichLabel,
-
     #[nwg_control(list_style: nwg::ListViewStyle::Detailed, ex_flags: nwg::ListViewExFlags::from_bits(nwg::ListViewExFlags::HEADER_DRAG_DROP.bits() | nwg::ListViewExFlags::FULL_ROW_SELECT.bits() | nwg::ListViewExFlags::BORDER_SELECT.bits()).unwrap())]
-    #[nwg_layout_item(layout: flex, margin: Rect{
-        start: Dimension::Percent(0.333333333),
-        end: Dimension::Points(0.0),
-        top: Dimension::Points(0.0),
-        bottom: Dimension::Points(0.0),
-    })]
-    list_orphan_ace: nwg::ListView,
-
-    #[nwg_control(list_style: nwg::ListViewStyle::Detailed, ex_flags: nwg::ListViewExFlags::from_bits(nwg::ListViewExFlags::HEADER_DRAG_DROP.bits() | nwg::ListViewExFlags::FULL_ROW_SELECT.bits() | nwg::ListViewExFlags::BORDER_SELECT.bits()).unwrap())]
-    #[nwg_layout_item(layout: flex, margin: Rect{
-        start: Dimension::Percent(0.333333333),
-        end: Dimension::Points(0.0),
-        top: Dimension::Points(0.0),
-        bottom: Dimension::Points(0.0),
-    })]
-    list_deleg_missing: nwg::ListView,
-
-    #[nwg_control(list_style: nwg::ListViewStyle::Detailed, ex_flags: nwg::ListViewExFlags::from_bits(nwg::ListViewExFlags::HEADER_DRAG_DROP.bits() | nwg::ListViewExFlags::FULL_ROW_SELECT.bits() | nwg::ListViewExFlags::BORDER_SELECT.bits()).unwrap())]
-    #[nwg_layout_item(layout: flex, margin: Rect{
-        start: Dimension::Percent(0.333333333),
-        end: Dimension::Points(0.0),
-        top: Dimension::Points(0.0),
-        bottom: Dimension::Points(0.0),
-    })]
-    list_deleg_found: nwg::ListView,
+    #[nwg_layout_item(layout: grid, col: 1, row: 0, col_span: 2)]
+    list: nwg::ListView,
 }
 
 impl BasicApp {
     fn init(&self) {
-        self.list_orphan_ace.set_headers_enabled(true);
-        self.list_orphan_ace.insert_column(nwg::InsertListViewColumn {
-            width: Some(100),
-            text: Some("Resource".to_owned()),
+        self.list.set_headers_enabled(true);
+        let (width, _) = self.list.size();
+        self.list.insert_column(nwg::InsertListViewColumn {
+            width: Some((std::cmp::min(width/2, 200) - 10) as i32),
+            text: Some("".to_owned()),
             ..Default::default()
         });
-        self.list_orphan_ace.insert_column(nwg::InsertListViewColumn {
-            text: Some("Access rights".to_owned()),
-            ..Default::default()
-        });
-        self.list_deleg_missing.set_headers_enabled(true);
-        self.list_deleg_missing.insert_column(nwg::InsertListViewColumn {
-            width: Some(100),
-            text: Some("Resource".to_owned()),
-            ..Default::default()
-        });
-        self.list_deleg_missing.insert_column(nwg::InsertListViewColumn {
-            text: Some("Access rights".to_owned()),
-            ..Default::default()
-        });
-        self.list_deleg_found.set_headers_enabled(true);
-        self.list_deleg_found.insert_column(nwg::InsertListViewColumn {
-            width: Some(100),
-            text: Some("Resource".to_owned()),
-            ..Default::default()
-        });
-        self.list_deleg_found.insert_column(nwg::InsertListViewColumn {
-            text: Some("Access rights".to_owned()),
+        self.list.insert_column(nwg::InsertListViewColumn {
+            text: Some("Details".to_owned()),
+            width: Some((std::cmp::min(width/2, 200) - 10) as i32),
             ..Default::default()
         });
         self.refresh();
@@ -166,7 +118,7 @@ impl BasicApp {
 
     fn about(&self) {
         let p = nwg::MessageParams {
-            title: "About ADeleg",
+            title: "About",
             content: &format!("{}\n\nVersion {}\nDownload the latest version at: {}",
                 env!("CARGO_PKG_DESCRIPTION"), env!("CARGO_PKG_VERSION"), env!("CARGO_PKG_REPOSITORY")),
             buttons: nwg::MessageButtons::Ok,
@@ -183,17 +135,26 @@ impl BasicApp {
         }
     }
 
+    fn toggle_view_builtin_delegations(&self) {
+        let prev = *(self.view_builtin_delegations.borrow());
+
+        *self.view_builtin_delegations.borrow_mut() = !prev;
+        self.redraw();
+    }
+
+    fn toggle_view_unreadable_warnings(&self) {
+        let prev = *(self.hide_unreadable_warnings.borrow());
+
+        *self.hide_unreadable_warnings.borrow_mut() = !prev;
+        self.redraw();
+    }
+
     fn set_view_index_by_resources(&self) {
-        {
-            *(self.view_by_trustee.borrow_mut()) = false;
-        }
+        *self.view_by_trustee.borrow_mut() = false;
         self.redraw();
     }
 
     fn set_view_index_by_trustees(&self) {
-        {
-            *(self.view_by_trustee.borrow_mut()) = true;
-        }
         let results = self.results.as_ref().unwrap().borrow();
         let mut warning_count = 0;
         for (_, result) in results.iter() {
@@ -211,6 +172,7 @@ impl BasicApp {
         if warning_count > 0 {
             BasicApp::show_warning(&format!("{} warnings were generated during analysis, switch back to Resources view to see them", warning_count));
         }
+        *self.view_by_trustee.borrow_mut() = true;
         self.redraw();
     }
 
@@ -312,12 +274,17 @@ impl BasicApp {
         {
             let mut results = self.results.as_ref().unwrap().borrow_mut();
             let mut engine = self.engine.as_ref().unwrap().borrow_mut();
-            let templates = self.template_file_paths.as_ref().unwrap().borrow();
-            let delegations = self.delegation_file_paths.as_ref().unwrap().borrow();
+            let templates = self.template_file_paths.borrow();
+            let delegations = self.delegation_file_paths.borrow();
 
             engine.templates.clear();
             engine.delegations.clear();
             results.clear();
+
+            if let Err(e) = engine.load_delegation_json(crate::engine::BUILTIN_ACES) {
+                BasicApp::show_error(&format!("Unable to parse builtin delegations: {}", e));
+                std::process::exit(1);
+            }
 
             for file_path in templates.iter() {
                 let json = match std::fs::read_to_string(file_path) {
@@ -346,15 +313,15 @@ impl BasicApp {
                 }
             }
 
-            let new_results = match engine.run() {
-                Ok(r) => r,
+            match engine.run() {
+                Ok(r) => results.extend(r.into_iter()),
                 Err(e) => {
                     self.tree_view.clear();
                     self.tree_view.insert_item("Error", None, nwg::TreeInsert::Root);
-                    HashMap::new()
+                    BasicApp::show_error(&format!("Unable to scan delegations: {}", e));
+                    return;
                 },
             };
-            results.extend(new_results);
         }
         self.redraw();
     }
@@ -381,23 +348,38 @@ impl BasicApp {
 
     fn redraw(&self) {
         let view_by_trustee = *self.view_by_trustee.borrow();
+        let view_builtin_delegations = *self.view_builtin_delegations.borrow();
+        let hide_unreadable_warnings = *self.hide_unreadable_warnings.borrow();
         self.menu_view_index_by_resources.set_checked(!view_by_trustee);
         self.menu_view_index_by_trustees.set_checked(view_by_trustee);
+        self.menu_view_builtin_delegations.set_checked(view_builtin_delegations);
+        self.menu_view_unreadable_warnings.set_checked(!hide_unreadable_warnings);
         self.window.focus();
         self.tree_view.clear();
         let results = self.results.as_ref().unwrap().borrow();
 
         if view_by_trustee {
+            self.list.update_column(0, nwg::InsertListViewColumn {
+                text: Some("Resource".to_owned()),
+                width: Some(self.list.column(0, 100).expect("unable to fetch column 0").width),
+                ..Default::default()
+            });
             let mut trustees: HashSet<Sid> = HashSet::new();
             for (location, res) in results.iter() {
                 if let Ok(res) = res {
                     for ace in &res.orphan_aces {
                         trustees.insert(ace.trustee.clone());
                     }
-                    for (_, trustee) in &res.delegations_missing {
+                    for (deleg, trustee) in &res.delegations_missing {
+                        if deleg.builtin && !view_builtin_delegations {
+                            continue;
+                        }
                         trustees.insert(trustee.clone());
                     }
-                    for (_, trustee, _) in &res.delegations_found {
+                    for (deleg, trustee, _) in &res.delegations_found {
+                        if deleg.builtin && !view_builtin_delegations {
+                            continue;
+                        }
                         trustees.insert(trustee.clone());
                     }
                 }
@@ -430,9 +412,21 @@ impl BasicApp {
                 }
             }
         } else {
+            self.list.update_column(0, nwg::InsertListViewColumn {
+                text: Some("Trustee".to_owned()),
+                width: Some(self.list.column(0, 100).expect("unable to fetch column 0").width),
+                ..Default::default()
+            });
             let mut results: Vec<(&DelegationLocation, &Result<AdelegResult, AdelegError>)> = results.iter().collect();
             results.sort_by(|(loc_a, _), (loc_b, _)| loc_a.cmp(loc_b));
             for (location, res) in results {
+                if let Ok(res) = &res {
+                    if !res.needs_to_be_displayed(view_builtin_delegations) {
+                        continue;
+                    }
+                } else if hide_unreadable_warnings {
+                    continue;
+                }
                 let mut parent = None;
                 let mut cursor = self.tree_view.root();
                 let path = self.location_to_tree_path(&location);
@@ -461,7 +455,6 @@ impl BasicApp {
             }
         }
         self.tree_view.set_enabled(true);
-        self.flex.fit().expect("flexbox layout fit error");
     }
 
     fn show_template_load_dialog(&self) {
@@ -484,7 +477,7 @@ impl BasicApp {
             .map(|s| s.to_string_lossy().to_string())
             .collect();
 
-        self.template_file_paths.as_ref().unwrap().borrow_mut().append(&mut files);
+        self.template_file_paths.borrow_mut().append(&mut files);
     }
 
     fn show_delegation_load_dialog(&self) {
@@ -506,16 +499,11 @@ impl BasicApp {
             .iter()
             .map(|s| s.to_string_lossy().to_string())
             .collect();
-        self.delegation_file_paths.as_ref().unwrap().borrow_mut().append(&mut files);
+        self.delegation_file_paths.borrow_mut().append(&mut files);
         self.refresh();
     }
 
     fn handle_treeview_select(&self) {
-        self.warning_text.set_text("");
-        self.list_orphan_ace.clear();
-        self.list_deleg_missing.clear();
-        self.list_deleg_found.clear();
-
         let mut path = vec![];
         let mut node = self.tree_view.selected_item();
         if node.is_none() {
@@ -530,9 +518,12 @@ impl BasicApp {
         }
 
         let view_by_trustees = *self.view_by_trustee.borrow();
+        let view_builtin_delegations = *self.view_builtin_delegations.borrow();
+        let hide_unreadable_warnings = *self.hide_unreadable_warnings.borrow();
         let results = self.results.as_ref().unwrap().borrow();
         let engine = self.engine.as_ref().unwrap().borrow();
 
+        self.list.clear();
         if view_by_trustees {
             let trustee = self.tree_path_to_trustee(&path);
             for (location, result) in results.iter() {
@@ -541,15 +532,15 @@ impl BasicApp {
                         if &ace.trustee != &trustee {
                             continue;
                         }
-                        self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
+                        self.list.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 0,
                             text: Some(location.to_string()),
                             image: None,
                         });
-                        self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
+                        self.list.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
-                            column_index: 2,
+                            column_index: 1,
                             text: Some(engine.describe_ace(
                                 ace.access_mask,
                                 ace.get_object_type(),
@@ -561,16 +552,16 @@ impl BasicApp {
                         });
                     }
                     for (delegation, deleg_trustee) in &result.delegations_missing {
-                        if deleg_trustee != &trustee {
+                        if deleg_trustee != &trustee || (delegation.builtin && !view_builtin_delegations) {
                             continue;
                         }
-                        self.list_deleg_missing.insert_item(nwg::InsertListViewItem {
+                        self.list.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 0,
                             text: Some(location.to_string()),
                             image: None,
                         });
-                        self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
+                        self.list.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 1,
                             text: Some(engine.describe_delegation_rights(&delegation.rights)),
@@ -578,16 +569,16 @@ impl BasicApp {
                         });
                     }
                     for (delegation, deleg_trustee, _) in &result.delegations_found {
-                        if deleg_trustee != &trustee {
+                        if deleg_trustee != &trustee || (delegation.builtin && !view_builtin_delegations) {
                             continue;
                         }
-                        self.list_deleg_found.insert_item(nwg::InsertListViewItem {
+                        self.list.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 0,
                             text: Some(location.to_string()),
                             image: None,
                         });
-                        self.list_deleg_found.insert_item(nwg::InsertListViewItem {
+                        self.list.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 1,
                             text: Some(engine.describe_delegation_rights(&delegation.rights)),
@@ -602,27 +593,34 @@ impl BasicApp {
                 let result = match result {
                     Ok(res) => res,
                     Err(e) => {
-                        self.warning_text.set_text(&e.to_string());
+                        if !hide_unreadable_warnings {
+                            self.list.insert_item(nwg::InsertListViewItem {
+                                index: Some(0),
+                                column_index: 0,
+                                text: None,
+                                image: None,
+                            });
+                            self.list.insert_item(nwg::InsertListViewItem {
+                                index: Some(0),
+                                column_index: 1,
+                                text: Some(e.to_string()),
+                                image: None,
+                            });
+                        }
                         return;
                     },
                 };
     
                 for ace in &result.orphan_aces {
-                    self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
+                    self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 0,
                         text: Some(engine.resolve_sid(&ace.trustee)),
                         image: None,
                     });
-                    self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
+                    self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 1,
-                        text: Some(engine.resolve_sid(&ace.trustee)),
-                        image: None,
-                    });
-                    self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
-                        index: Some(0),
-                        column_index: 2,
                         text: Some(engine.describe_ace(
                             ace.access_mask,
                             ace.get_object_type(),
@@ -634,13 +632,16 @@ impl BasicApp {
                     });
                 }
                 for (delegation, trustee) in &result.delegations_missing {
-                    self.list_deleg_missing.insert_item(nwg::InsertListViewItem {
+                    if delegation.builtin && !view_builtin_delegations {
+                        continue;
+                    }
+                    self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 0,
                         text: Some(engine.resolve_sid(&trustee)),
                         image: None,
                     });
-                    self.list_orphan_ace.insert_item(nwg::InsertListViewItem {
+                    self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 1,
                         text: Some(engine.describe_delegation_rights(&delegation.rights)),
@@ -648,13 +649,16 @@ impl BasicApp {
                     });
                 }
                 for (delegation, trustee, _) in &result.delegations_found {
-                    self.list_deleg_found.insert_item(nwg::InsertListViewItem {
+                    if delegation.builtin && !view_builtin_delegations {
+                        continue;
+                    }
+                    self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 0,
                         text: Some(engine.resolve_sid(&trustee)),
                         image: None,
                     });
-                    self.list_deleg_found.insert_item(nwg::InsertListViewItem {
+                    self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 1,
                         text: Some(engine.describe_delegation_rights(&delegation.rights)),
@@ -786,13 +790,14 @@ impl ConnectionDialog {
         };
 
         self.window.set_visible(false);
-        let mut engine = RefCell::new(Engine::new(Box::leak(Box::new(ldap)), true));
-        if let Err(e) = engine.borrow_mut().load_delegation_json(BUILTIN_ACES) {
-            BasicApp::show_error(&format!("Unable to parse builtin delegations: {}", e));
-            std::process::exit(1);
-        }
+        let mut engine = Engine::new(Box::leak(Box::new(ldap)), true);
+        let engine = RefCell::new(engine);
         let results = RefCell::new(HashMap::new());
-        let _app = BasicApp::build_ui(BasicApp { engine: Some(engine), results: Some(results), ..Default::default() }).expect("Failed to build UI");
+        let _app = BasicApp::build_ui(BasicApp {
+            engine: Some(engine),
+            results: Some(results),
+            ..Default::default()
+        }).expect("Failed to build UI");
         nwg::dispatch_thread_events();
         self.window.close();
     }

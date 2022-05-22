@@ -96,9 +96,13 @@ fn main() {
             .help("Include built-in delegations in the output")
             .long("show-builtin")
         ).arg(
-            Arg::new("view_raw")
-                .help("View unresolved ACE contents")
-                .long("view-raw")
+            Arg::new("hide_unreadable_warnings")
+            .help("Hide warnings about unreadable security descriptors")
+            .long("hide-unreadable-warnings")
+        ).arg(
+            Arg::new("show_raw")
+                .help("Show unresolved ACE contents")
+                .long("show-raw")
         );
 
     let args = app.get_matches();
@@ -132,7 +136,7 @@ fn main() {
         }
     };
 
-    let mut engine = Engine::new(&conn, !args.is_present("view_raw"));
+    let mut engine = Engine::new(&conn, !args.is_present("show_raw"));
     engine.load_delegation_json(engine::BUILTIN_ACES).expect("unable to parse builtin delegations");
 
     if let Some(input_filepaths) = args.values_of("templates") {
@@ -181,12 +185,14 @@ fn main() {
             let res = match res {
                 Ok(r) => r,
                 Err(e) => {
-                    writer.write_record(&[
-                        location.to_string().as_str(),
-                        "",
-                        "Warning",
-                        &e.to_string(),
-                    ]).expect("unable to write CSV record");
+                    if !args.is_present("hide-unreadable-warnings") {
+                        writer.write_record(&[
+                            location.to_string().as_str(),
+                            "",
+                            "Warning",
+                            &e.to_string(),
+                        ]).expect("unable to write CSV record");
+                    }
                     continue;
                 },
             };
@@ -196,14 +202,6 @@ fn main() {
                     "",
                     "Warning",
                     &format!("ACL is not in canonical order, e.g. this ACE is out of order: {}", non_canonical_ace),
-                ]).expect("unable to write CSV record");
-            }
-            for (deleg, trustee) in &res.delegations_missing {
-                writer.write_record(&[
-                    location.to_string().as_str(),
-                    engine.resolve_sid(&trustee).as_str(),
-                    "Delegation (missing!)",
-                    engine.describe_delegation_rights(&deleg.rights).as_str(),
                 ]).expect("unable to write CSV record");
             }
             for ace in &res.orphan_aces {
@@ -225,6 +223,14 @@ fn main() {
                     location.to_string().as_str(),
                     engine.resolve_sid(&trustee).as_str(),
                     "Delegation",
+                    engine.describe_delegation_rights(&deleg.rights).as_str(),
+                ]).expect("unable to write CSV record");
+            }
+            for (deleg, trustee) in &res.delegations_missing {
+                writer.write_record(&[
+                    location.to_string().as_str(),
+                    engine.resolve_sid(&trustee).as_str(),
+                    "Delegation (missing!)",
                     engine.describe_delegation_rights(&deleg.rights).as_str(),
                 ]).expect("unable to write CSV record");
             }
@@ -309,13 +315,11 @@ fn main() {
         res.sort_by(|(loc_a, _), (loc_b, _)| loc_a.cmp(loc_b));
         for (location, res) in res {
             if let Ok(res) = &res {
-                if res.non_canonical_ace.is_none() &&
-                    res.orphan_aces.is_empty() &&
-                    res.delegations_missing.iter().all(|(d, __)| d.builtin) &&
-                    res.delegations_found.iter().all(|(d, _, _)| d.builtin) &&
-                    (res.delegations_found.is_empty() || !args.is_present("show_builtin")) {
+                if !res.needs_to_be_displayed(args.is_present("show_builtin")) {
                     continue;
                 }
+            } else if args.is_present("hide-unreadable-warnings") {
+                continue;
             }
 
             println!("\n=== {}", &location);
