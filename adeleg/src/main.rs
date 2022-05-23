@@ -8,12 +8,10 @@ mod gui;
 use std::io::Write;
 use std::collections::HashMap;
 use engine::PrincipalType;
-use utils::pwstr_to_str;
-use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::Networking::Ldap::LDAP_PORT;
-use clap::{App, Arg};
+use clap::{Command, Arg};
 use authz::Sid;
-use winldap::connection::{LdapConnection, LdapCredentials};
+use winldap::connection::LdapConnection;
 use crate::gui::run_gui;
 use crate::engine::{Engine, AdelegResult};
 use crate::error::AdelegError;
@@ -26,7 +24,7 @@ fn main() {
     }
 
     let default_port = format!("{}", LDAP_PORT);
-    let app = App::new(env!("CARGO_PKG_NAME"))
+    let app = Command::new(env!("CARGO_PKG_NAME"))
         .version(env!("CARGO_PKG_VERSION"))
         .about(env!("CARGO_PKG_DESCRIPTION"))
         .arg(
@@ -295,7 +293,7 @@ fn main() {
         }
 
         drop(writer);
-        std::io::stdout().flush();
+        let _ = std::io::stdout().flush();
         if !show_warning_unreadable && warning_unreadable_count > 0 {
             eprintln!("\n [!] {} security descriptors could not be read, use --show-warning-unreadable to see where", warning_unreadable_count);
         }
@@ -392,7 +390,7 @@ fn main() {
             }
         }
         if warning_count > 0 {
-            std::io::stdout().flush();
+            let _ = std::io::stdout().flush();
             eprintln!("\n [!] {} warnings were generated during analysis, some results may be incomplete. Use the resource view to see warnings.", warning_count);
         }
     } else {
@@ -452,7 +450,7 @@ fn main() {
             if res.delegations_found.iter().any(|(d, _, _)| !d.builtin) ||
                     (!res.delegations_found.is_empty() && show_builtin) {
                 println!("       Documented delegations:");
-                for (delegation, trustee, aces) in &res.delegations_found {
+                for (delegation, trustee, _) in &res.delegations_found {
                     if !show_builtin && delegation.builtin {
                         continue;
                     }
@@ -463,7 +461,7 @@ fn main() {
         }
 
         if !show_warning_unreadable && warning_unreadable_count > 0 {
-            std::io::stdout().flush();
+            let _= std::io::stdout().flush();
             eprintln!("\n [!] {} security descriptors could not be read, use --show-warning-unreadable to see where", warning_unreadable_count);
         }
     }

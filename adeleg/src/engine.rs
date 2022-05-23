@@ -1,12 +1,11 @@
 use core::fmt::Display;
 use core::cell::RefCell;
-use core::ptr::null_mut;
 use std::collections::{HashMap, HashSet};
 use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_WRITE_DAC, ADS_RIGHT_READ_CONTROL, ADS_RIGHT_DS_LIST_OBJECT, ADS_RIGHT_ACCESS_SYSTEM_SECURITY, ADS_RIGHT_DELETE, ADS_RIGHT_DS_WRITE_PROP, ADS_RIGHT_DS_CREATE_CHILD, ADS_RIGHT_DS_DELETE_CHILD, ADS_RIGHT_DS_CONTROL_ACCESS, ADS_RIGHT_DS_SELF, ADS_RIGHT_DS_DELETE_TREE, ADS_RIGHT_ACTRL_DS_LIST, ADS_RIGHT_DS_READ_PROP, ADS_RIGHT_WRITE_OWNER};
 use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION, SidTypeUser, SidTypeGroup, SidTypeComputer};
 use windows::Win32::Networking::Ldap::{LDAP_SCOPE_BASE, LDAP_SCOPE_SUBTREE, LDAP_SERVER_SD_FLAGS_OID};
 use windows::Win32::Security::SID_NAME_USE;
-use windows::Win32::Foundation::{PSID, PSTR, PWSTR, GetLastError, BOOL};
+use windows::Win32::Foundation::{PSID, PSTR, PWSTR, BOOL};
 use authz::{SecurityDescriptor, Sid, Ace};
 use windows::Win32::System::LibraryLoader::{LoadLibraryA, GetProcAddress};
 use winldap::connection::LdapConnection;
@@ -14,7 +13,7 @@ use winldap::utils::{get_attr_strs, get_attr_str};
 use winldap::search::{LdapSearch, LdapEntry};
 use winldap::error::LdapError;
 use winldap::control::{BerVal, BerEncodable, LdapControl};
-use crate::delegations::{Delegation, DelegationTemplate, DelegationLocation, DelegationAce, DelegationRights};
+use crate::delegations::{Delegation, DelegationTemplate, DelegationLocation, DelegationRights};
 use crate::error::AdelegError;
 use crate::utils::{Domain, find_ace_positions, get_ace_derived_by_inheritance_from_schema, get_domains, get_attr_sid, get_attr_sd, ends_with_case_insensitive, capitalize};
 use crate::schema::Schema;
@@ -90,6 +89,7 @@ pub(crate) struct Engine<'a> {
     resolve_names: bool,
     pub(crate) templates: HashMap<String, DelegationTemplate>,
     pub(crate) delegations: Vec<Delegation>,
+    expected_aces: HashMap<Sid, HashMap<DelegationLocation, Vec<(Delegation, Vec<Ace>)>>>,
     resolved_sid_to_dn: RefCell<HashMap<Sid, String>>,
     resolved_sid_to_type: RefCell<HashMap<Sid, PrincipalType>>,
     p_lookupaccountsidlocal: Option<unsafe extern "system" fn(PSID, PWSTR, *mut u32, PWSTR, *mut u32, *mut SID_NAME_USE) -> BOOL>,
@@ -196,36 +196,43 @@ impl<'a> Engine<'a> {
             resolve_names,
             templates: HashMap::new(),
             delegations: Vec::new(),
+            expected_aces: HashMap::new(),
             p_lookupaccountsidlocal,
             resolved_sid_to_dn: RefCell::new(HashMap::new()),
             resolved_sid_to_type: RefCell::new(HashMap::new()),
         }
     }
 
-    pub fn load_template_json(&mut self, json: &str) -> Result<(), String> {
+    pub fn load_template_json(&mut self, json: &str) -> Result<(), AdelegError> {
         let json = json.trim();
         if json.is_empty() {
             return Ok(()); // empty file are invalid JSON, just skip them
         }
-        let templates = match DelegationTemplate::from_json(&json, &self.schema) {
-            Ok(v) => v,
-            Err(e) => return Err(format!("Unable to parse template: {}", e)),
-        };
+        let templates = DelegationTemplate::from_json(&json, &self.schema)?;
         for template in templates.into_iter() {
             self.templates.insert(template.name.to_owned(), template);
         }
         Ok(())
     }
 
-    pub fn load_delegation_json(&mut self, json: &str) -> Result<(), String> {
+    pub fn load_delegation_json(&mut self, json: &str) -> Result<(), AdelegError> {
         let json = json.trim();
         if json.is_empty() {
             return Ok(()); // empty file are invalid JSON, just skip them
         }
-        let mut delegations = match Delegation::from_json(&json, &self.templates, &self.schema) {
-            Ok(v) => v,
-            Err(e) => return Err(format!("Unable to parse delegation file: {}", e)),
-        };
+        // Derive expected ACEs from these delegations, and index these ACEs by Sid then Location
+        let mut delegations = Delegation::from_json(&json, &self.templates, &self.schema)?;
+        for delegation in &delegations {
+            let expected_aces = delegation.derive_aces(&self.ldap, &self.root_domain, &self.domains)?;
+            for (location, aces) in expected_aces {
+                if let Some(first_ace) = aces.get(0) {
+                    let sid = first_ace.trustee.clone();
+                    self.expected_aces.entry(sid).or_insert(HashMap::new())
+                        .entry(location).or_insert(vec![])
+                        .push((delegation.clone(), aces));
+                }
+            }
+        }
         self.delegations.append(&mut delegations);
         Ok(())
     }
@@ -441,27 +448,6 @@ impl<'a> Engine<'a> {
 
     // Results are indexed by location (DN or class name) -> (orphan ACEs, delegations missing, delegations in place)
     pub fn run(&self) -> Result<HashMap<DelegationLocation, Result<AdelegResult, AdelegError>>, LdapError> {
-        // Derive expected ACEs from these delegations, and index these ACEs by Sid then Location
-        let mut expected_delegations: HashMap<Sid, HashMap<DelegationLocation, Vec<(Delegation, Vec<Ace>)>>> = HashMap::new();
-        for delegation in &self.delegations {
-            let expected_aces = match delegation.derive_aces(&self.ldap, &self.root_domain, &self.domains) {
-                Ok(h) => h,
-                Err(e) => {
-                    eprintln!(" [!] Unable to compute expected ACEs from delegation: {}", e);
-                    std::process::exit(1);
-                    // TODO: move this possibly-error-generating computation (only unresolved samaccountnames, for now)
-                    // to the moment a delegation is added, so that the computation is only done once, and the error context
-                    // is clearer (JSON file path, line, etc.)
-                }
-            };
-            for (location, aces) in expected_aces {
-                let sid = aces.get(0).expect("delegations should have at least one ACE").trustee.clone();
-                expected_delegations.entry(sid).or_insert(HashMap::new())
-                    .entry(location).or_insert(vec![])
-                    .push((delegation.clone(), aces));
-            }
-        }
-
         // Fetch all meaningful ACEs
         let schema_aces = self.get_schema_aces()?;
         let mut res = schema_aces.get(&self.root_domain.sid).cloned().unwrap_or_default();
@@ -496,7 +482,7 @@ impl<'a> Engine<'a> {
 
         // Move ACEs from "orphan" to "delegations found" if they match an expected delegation
         // Otherwise let them there, and add the delegation as "missing"
-        for (trustee, expected_locations) in &expected_delegations {
+        for (trustee, expected_locations) in &self.expected_aces {
             for (location, expected_delegations) in expected_locations {
                 for (expected_delegation, expected_aces) in expected_delegations {
                     let res = match res.get_mut(location) {
@@ -519,7 +505,7 @@ impl<'a> Engine<'a> {
                         }
                     }
 
-                    res.orphan_aces = res.orphan_aces.drain(..).enumerate().filter(|(idx, ace)| !explained_aces[*idx]).map(|(idx, ace)| ace).collect();
+                    res.orphan_aces = res.orphan_aces.drain(..).enumerate().filter(|(idx, _)| !explained_aces[*idx]).map(|(_, ace)| ace).collect();
                 }
             }
         }
@@ -752,7 +738,6 @@ impl<'a> Engine<'a> {
                     for (ctrl_guid, ctrl_name) in &self.schema.validated_write_names {
                         if ctrl_guid == guid {
                             res.push_str(&format!("(validated write {})", ctrl_name));
-                            found = true;
                             break;
                         }
                     }

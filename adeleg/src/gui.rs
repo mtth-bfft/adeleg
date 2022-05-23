@@ -3,13 +3,12 @@ extern crate native_windows_derive as nwd;
 
 use std::collections::{HashMap, HashSet};
 use std::cell::RefCell;
-use stretch::{geometry::{Rect, Size}, style::{Overflow, FlexDirection, FlexWrap, Dimension, PositionType, Style}};
-use nwg::{NativeUi, OemIcon};
+use nwg::NativeUi;
 use nwd::NwgUi;
-use winldap::connection::{LdapCredentials, LdapConnection};
-use authz::{Ace, Sid};
-use crate::delegations::{DelegationLocation, Delegation, DelegationRights};
-use crate::engine::{Engine, BUILTIN_ACES};
+use winldap::connection::LdapConnection;
+use authz::Sid;
+use crate::delegations::DelegationLocation;
+use crate::engine::Engine;
 use crate::error::AdelegError;
 use crate::AdelegResult;
 use crate::utils::{ends_with_case_insensitive, replace_suffix_case_insensitive};
@@ -307,7 +306,7 @@ impl BasicApp {
                     return;
                 }
             }
-            for file_path in templates.iter() {
+            for file_path in delegations.iter() {
                 let json = match std::fs::read_to_string(file_path) {
                     Ok(s) => s,
                     Err(e) => {
@@ -373,7 +372,7 @@ impl BasicApp {
                 ..Default::default()
             });
             let mut trustees: HashSet<Sid> = HashSet::new();
-            for (location, res) in results.iter() {
+            for (_, res) in results.iter() {
                 if let Ok(res) = res {
                     for ace in &res.orphan_aces {
                         trustees.insert(ace.trustee.clone());
@@ -855,8 +854,7 @@ impl ConnectionDialog {
         };
 
         self.window.set_visible(false);
-        let mut engine = Engine::new(Box::leak(Box::new(ldap)), true);
-        let engine = RefCell::new(engine);
+        let engine = RefCell::new(Engine::new(Box::leak(Box::new(ldap)), true));
         let results = RefCell::new(HashMap::new());
         let _app = BasicApp::build_ui(BasicApp {
             engine: Some(engine),

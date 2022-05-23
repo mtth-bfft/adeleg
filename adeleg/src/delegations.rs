@@ -2,7 +2,7 @@ use authz::{Ace, AceType, Guid};
 use std::collections::HashMap;
 use authz::Sid;
 use serde::{Serialize, Deserialize};
-use crate::{utils::{Domain, replace_suffix_case_insensitive, ends_with_case_insensitive, resolve_samaccountname_to_sid}, schema::Schema};
+use crate::{utils::{Domain, replace_suffix_case_insensitive, ends_with_case_insensitive, resolve_samaccountname_to_sid}, schema::Schema, error::AdelegError};
 use winldap::connection::LdapConnection;
 use windows::Win32::Security::{CONTAINER_INHERIT_ACE, INHERIT_ONLY_ACE, OBJECT_INHERIT_ACE, ACE_OBJECT_TYPE_PRESENT};
 use windows::Win32::Security::NO_PROPAGATE_INHERIT_ACE;
@@ -183,17 +183,17 @@ pub enum DelegationRights {
 }
 
 impl Delegation {
-    pub fn from_json(json: &str, templates: &HashMap<String, DelegationTemplate>, schema: &Schema) -> Result<Vec<Self>, String> {
+    pub fn from_json(json: &str, templates: &HashMap<String, DelegationTemplate>, schema: &Schema) -> Result<Vec<Self>, AdelegError> {
         let mut res: Vec<Self> = match serde_json::from_str(&json) {
             Ok(v) => v,
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(AdelegError::JsonParsing(e.to_string())),
         };
         for delegation in &mut res {
             if let DelegationRights::TemplateName { template } = &delegation.rights {
                 if let Some(template) = templates.get(template.as_str()) {
                     delegation.rights = DelegationRights::Template(template.clone());
                 } else {
-                    return Err(format!("unknown template name \"{}\" referenced in delegation", template));
+                    return Err(AdelegError::UnresolvedTemplateName(template.clone()));
                 }
             }
             if let DelegationRights::Ace(ace) = &mut delegation.rights {
@@ -201,7 +201,7 @@ impl Delegation {
                     if let Some(guid) = resolve_object_type(object_type, schema) {
                         ace.object_type = Some(guid);
                     } else if !delegation.builtin { // only ignore missing object types on built-in delegations
-                        return Err(format!("unknown object type \"{}\" referenced in delegation", object_type));
+                        return Err(AdelegError::UnresolvedObjectTypeName(object_type.clone()));
                     } else {
                         continue;
                     }
@@ -210,7 +210,7 @@ impl Delegation {
                     if let Some(guid) = resolve_inherited_object_type(inherited_object_type, schema) {
                         ace.inherited_object_type = Some(guid);
                     } else if !delegation.builtin { // only ignore missing object types on built-in delegations
-                        return Err(format!("unknown inherited object type \"{}\" referenced in delegation", inherited_object_type));
+                        return Err(AdelegError::UnresolvedObjectTypeName(inherited_object_type.clone()));
                     } else{
                         continue;
                     }
@@ -220,11 +220,11 @@ impl Delegation {
         Ok(res)
     }
 
-    pub fn derive_aces(&self, conn: &LdapConnection, root_domain: &Domain, domains: &[Domain]) -> Result<HashMap<DelegationLocation, Vec<Ace>>, String> {
+    pub fn derive_aces(&self, conn: &LdapConnection, root_domain: &Domain, domains: &[Domain]) -> Result<HashMap<DelegationLocation, Vec<Ace>>, AdelegError> {
         let mut res = HashMap::new();
 
         let delegation_aces = match &self.rights {
-            DelegationRights::TemplateName { template }=> return Err(format!("Template \"{}\" must first be resolved before deriving ACEs", template)),
+            DelegationRights::TemplateName { template }=> return Err(AdelegError::UnresolvedTemplateName(template.clone())),
             DelegationRights::Ace(ace) => std::slice::from_ref(ace),
             DelegationRights::Template(template) => &template.rights[..],
         };
@@ -290,8 +290,7 @@ impl Delegation {
                         if let Ok(sid) = resolve_samaccountname_to_sid(conn, samaccountname, domain) {
                             vec![sid]
                         } else {
-                            return Err(format!("unresolved SamAccountName \"{}\\{}\" in {}",
-                                                domain.netbios_name, samaccountname, domain.distinguished_name));
+                            return Err(AdelegError::UnresolvedSamAccountName(samaccountname.to_owned(), domain.distinguished_name.to_owned()));
                         }
                     },
                 };
@@ -382,8 +381,11 @@ fn resolve_inherited_object_type(name: &str, schema: &Schema) -> Option<Guid> {
 }
 
 impl DelegationTemplate {
-    pub fn from_json(json: &str, schema: &Schema) -> Result<Vec<Self>, String> {
-        let mut res: Vec<DelegationTemplate> = serde_json::from_str(json).map_err(|e| format!("unable to parse template: {}", e))?;
+    pub fn from_json(json: &str, schema: &Schema) -> Result<Vec<Self>, AdelegError> {
+        let mut res: Vec<DelegationTemplate> = match serde_json::from_str(json) {
+            Ok(j) => j,
+            Err(e) => return Err(AdelegError::JsonParsing(e.to_string())),
+        };
         for template in &mut res {
             for ace in &mut template.rights {
                 // Do not fail if one of these class/attribute GUIDs fails to resolve: it simply means

@@ -3,7 +3,7 @@ use winldap::error::LdapError;
 use winldap::search::LdapSearch;
 use winldap::utils::get_attr_str;
 use windows::Win32::Networking::Ldap::LDAP_SCOPE_SUBTREE;
-use authz::{Sid, Guid};
+use authz::Guid;
 use std::collections::HashMap;
 use crate::utils::get_attr_guid;
 

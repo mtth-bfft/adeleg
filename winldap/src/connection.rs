@@ -1,7 +1,7 @@
 use core::ptr::null_mut;
 use crate::error::LdapError;
 use windows::Win32::Foundation::PWSTR;
-use windows::Win32::Networking::Ldap::{ldap_initW, ldap_unbind, ldap_connect, LDAP_OPT_HOST_NAME, LDAP_OPT_REFERRALS, LDAP_TIMEVAL, LDAP_SUCCESS, ldap_bind_sW, ldap, LDAP_SCOPE_BASE, ldap_set_option, LDAP_OPT_GETDSNAME_FLAGS, ldap_get_optionW};
+use windows::Win32::Networking::Ldap::{ldap_initW, ldap_unbind, ldap_connect, LDAP_OPT_REFERRALS, LDAP_TIMEVAL, LDAP_SUCCESS, ldap_bind_sW, ldap, LDAP_SCOPE_BASE, ldap_set_option};
 use windows::Win32::System::Rpc::{SEC_WINNT_AUTH_IDENTITY_W, SEC_WINNT_AUTH_IDENTITY_UNICODE};
 use crate::utils::{get_ldap_errcode, str_to_wstr, get_attr_str, get_attr_strs};
 use crate::search::{LdapSearch, LdapEntry};
@@ -9,12 +9,6 @@ use std::collections::HashSet;
 use std::iter::FromIterator;
 
 const LDAP_AUTH_NEGOTIATE: u32 = 1158;
-
-pub struct LdapCredentials<'a> {
-    pub domain: &'a str,
-    pub username: &'a str,
-    pub password: &'a str,
-}
 
 #[derive(Debug)]
 pub struct LdapConnection {

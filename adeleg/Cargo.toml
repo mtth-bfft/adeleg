@@ -6,14 +6,13 @@ authors = ["Aurélien Bordes <aurelien.bordes@ssi.gouv.fr>", "Matthieu Buffet <m
 repository = "https://github.com/mtth-bfft/adeleg"
 
 [dependencies]
+authz = { path = "../authz", features = ["serial"] }
+winldap = { path = "../winldap" }
 clap = "3.0.13"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.79"
-authz = { path = "../authz", features = ["serial"] }
-winldap = { path = "../winldap" }
 native-windows-gui = "1.0.12"
 native-windows-derive = "1.0.3"
-stretch = "0.3.2"
 csv = "1.1.6"
 
 [dependencies.windows]
@@ -24,8 +23,6 @@ features = [
     "Win32_Security_Authorization",
     "Win32_Networking_ActiveDirectory",
     "Win32_NetworkManagement_NetManagement",
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_UI_Controls",
     "Win32_System_SystemServices",
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
