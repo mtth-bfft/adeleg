@@ -126,7 +126,7 @@ impl BasicApp {
     fn about(&self) {
         let p = nwg::MessageParams {
             title: "About",
-            content: &format!("{}\n\nVersion {}\nDownload the latest version at: {}",
+            content: &format!("{}\nVersion {}\nDownload the latest version at: {}",
                 env!("CARGO_PKG_DESCRIPTION"), env!("CARGO_PKG_VERSION"), env!("CARGO_PKG_REPOSITORY")),
             buttons: nwg::MessageButtons::Ok,
             icons: nwg::MessageIcons::Question
