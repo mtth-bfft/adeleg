@@ -63,6 +63,10 @@ impl Sid {
         let s = format!("{}-{}", self, rid);
         Self::try_from(s.as_ref()).expect("invalid RID concatenation")
     }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
 }
 
 impl TryFrom<&str> for Sid {

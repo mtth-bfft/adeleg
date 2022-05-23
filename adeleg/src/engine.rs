@@ -1,8 +1,12 @@
+use core::ptr::null_mut;
 use std::collections::{HashMap, HashSet};
 use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_WRITE_DAC, ADS_RIGHT_READ_CONTROL, ADS_RIGHT_DS_LIST_OBJECT, ADS_RIGHT_ACCESS_SYSTEM_SECURITY, ADS_RIGHT_DELETE, ADS_RIGHT_DS_WRITE_PROP, ADS_RIGHT_DS_CREATE_CHILD, ADS_RIGHT_DS_DELETE_CHILD, ADS_RIGHT_DS_CONTROL_ACCESS, ADS_RIGHT_DS_SELF, ADS_RIGHT_DS_DELETE_TREE, ADS_RIGHT_ACTRL_DS_LIST, ADS_RIGHT_DS_READ_PROP, ADS_RIGHT_WRITE_OWNER};
 use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION};
 use windows::Win32::Networking::Ldap::{LDAP_SCOPE_BASE, LDAP_SCOPE_SUBTREE, LDAP_SERVER_SD_FLAGS_OID};
+use windows::Win32::Security::SID_NAME_USE;
+use windows::Win32::Foundation::{PSID, PSTR, PWSTR, GetLastError, BOOL};
 use authz::{SecurityDescriptor, Sid, Ace};
+use windows::Win32::System::LibraryLoader::{LoadLibraryA, GetProcAddress};
 use winldap::connection::LdapConnection;
 use winldap::utils::{get_attr_strs, get_attr_str};
 use winldap::search::{LdapSearch, LdapEntry};
@@ -35,6 +39,7 @@ pub(crate) struct Engine<'a> {
     resolve_names: bool,
     pub(crate) templates: HashMap<String, DelegationTemplate>,
     pub(crate) delegations: Vec<Delegation>,
+    p_lookupaccountsidlocal: Option<unsafe extern "system" fn(PSID, PWSTR, *mut u32, PWSTR, *mut u32, *mut SID_NAME_USE) -> BOOL>,
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +122,13 @@ impl<'a> Engine<'a> {
             ignored_trustee_sids.insert(domain.sid.with_rid(519));   // Enterprise Admins
         }
 
+        let h_sechost = unsafe { LoadLibraryA(PSTR(b"sechost.dll\x00".as_ptr())) };
+        let p_lookupaccountsidlocal: Option<unsafe extern "system" fn(PSID, PWSTR, *mut u32, PWSTR, *mut u32, *mut SID_NAME_USE) -> BOOL> = if h_sechost.is_invalid() {
+            None
+        } else {
+            unsafe { GetProcAddress(h_sechost, PSTR(b"LookupAccountSidLocalW\x00".as_ptr())).map(|f| core::mem::transmute(f)) }
+        };
+
         Self {
             ldap,
             domains,
@@ -127,6 +139,7 @@ impl<'a> Engine<'a> {
             resolve_names,
             templates: HashMap::new(),
             delegations: Vec::new(),
+            p_lookupaccountsidlocal,
         }
     }
 
@@ -710,6 +723,32 @@ impl<'a> Engine<'a> {
                 return entry.dn.clone();
             }
         }
+
+        // Try to resolve locally, in case it is a well known SID
+        if let Some(p_lookupaccountsidlocal) = self.p_lookupaccountsidlocal {
+            let mut siduse = SID_NAME_USE::default();
+            let mut user_name = vec![0u16; 256];
+            let mut user_name_len = user_name.len() as u32;
+            let mut domain_name = vec![0u16; 256];
+            let mut domain_name_len = domain_name.len() as u32;
+
+            // LookupAccountSidLocalW from sechost.dll is not in windows-rs (yet)
+            let succeeded = unsafe {
+                p_lookupaccountsidlocal(PSID(sid.as_bytes().as_ptr() as isize), PWSTR(user_name.as_mut_ptr()), &mut user_name_len as *mut _, PWSTR(domain_name.as_mut_ptr()), &mut domain_name_len as *mut _, &mut siduse as *mut _)
+            };
+            if succeeded.as_bool() {
+                user_name.truncate(user_name_len as usize);
+                domain_name.truncate(domain_name_len as usize);
+                if !user_name.is_empty() {
+                    return if domain_name.is_empty() {
+                        String::from_utf16_lossy(&user_name)
+                    } else {
+                        format!("{}\\{}", String::from_utf16_lossy(&domain_name), String::from_utf16_lossy(&user_name))
+                    }
+                }
+            }
+        }
+
         sid.to_string()
     }
 
