@@ -5,6 +5,7 @@ mod delegations;
 mod engine;
 mod gui;
 
+use std::io::Write;
 use std::collections::HashMap;
 use ntdsapi::DsConnection;
 use utils::pwstr_to_str;
@@ -92,16 +93,18 @@ fn main() {
                 .possible_values(&["resources", "trustees"])                
         ).arg(
             Arg::new("csv")
-                .help("Format output as CSV")
+                .help("Write output into a CSV file")
+                .takes_value(true)
+                .number_of_values(1)
                 .long("csv")
         ).arg(
             Arg::new("show_builtin")
             .help("Include built-in delegations in the output")
             .long("show-builtin")
         ).arg(
-            Arg::new("hide_unreadable_warnings")
-            .help("Hide warnings about unreadable security descriptors")
-            .long("hide-unreadable-warnings")
+            Arg::new("show_warning_unreadable")
+            .help("Show unreadable security descriptors as warnings")
+            .long("show-warning-unreadable")
         ).arg(
             Arg::new("show_raw")
                 .help("Show unresolved ACE contents")
@@ -187,18 +190,33 @@ fn main() {
     let res = match engine.run() {
         Ok(res) => res,
         Err(e) => {
-            eprintln!("An error occurred while scanning for delegations: {}", e);
+            eprintln!(" [!] Unable to scan for delegations: {}", e);
             std::process::exit(1);
         }
     };
 
-    if args.is_present("csv") {
-        let mut writer = csv::Writer::from_writer(std::io::stdout());
+    let show_builtin = args.is_present("show_builtin");
+    let show_warning_unreadable = args.is_present("show_warning_unreadable");
+    let mut warning_unreadable_count = 0;
+    if let Some(csv_path) = args.value_of("csv") {
+        let output: Box<dyn std::io::Write> = if csv_path == "-" {
+            Box::new(std::io::stdout())
+        } else {
+            match std::fs::OpenOptions::new().create(true).truncate(true).write(true).open(csv_path) {
+                Ok(f) => Box::new(f),
+                Err(e) => {
+                    eprintln!(" [!] Unable to open output CSV file {} : {}", csv_path, e);
+                    std::process::exit(1);
+                }
+            }
+        };
+        let mut writer = csv::Writer::from_writer(output);
         for (location, res) in &res {
             let res = match res {
                 Ok(r) => r,
                 Err(e) => {
-                    if !args.is_present("hide-unreadable-warnings") {
+                    warning_unreadable_count += 1;
+                    if show_warning_unreadable {
                         writer.write_record(&[
                             location.to_string().as_str(),
                             "",
@@ -231,14 +249,6 @@ fn main() {
                     ).as_str(),
                 ]).expect("unable to write CSV record");
             }
-            for (deleg, trustee, _) in &res.delegations_found {
-                writer.write_record(&[
-                    location.to_string().as_str(),
-                    engine.resolve_sid(&trustee).as_str(),
-                    "Delegation",
-                    engine.describe_delegation_rights(&deleg.rights).as_str(),
-                ]).expect("unable to write CSV record");
-            }
             for (deleg, trustee) in &res.delegations_missing {
                 writer.write_record(&[
                     location.to_string().as_str(),
@@ -247,6 +257,23 @@ fn main() {
                     engine.describe_delegation_rights(&deleg.rights).as_str(),
                 ]).expect("unable to write CSV record");
             }
+            for (deleg, trustee, _) in &res.delegations_found {
+                if deleg.builtin && !show_builtin {
+                    continue;
+                }
+                writer.write_record(&[
+                    location.to_string().as_str(),
+                    engine.resolve_sid(&trustee).as_str(),
+                    "Delegation",
+                    engine.describe_delegation_rights(&deleg.rights).as_str(),
+                ]).expect("unable to write CSV record");
+            }
+        }
+
+        drop(writer);
+        std::io::stdout().flush();
+        if !show_warning_unreadable && warning_unreadable_count > 0 {
+            eprintln!(" [!] {} security descriptors could not be read, use --show-warning-unreadable to see where", warning_unreadable_count);
         }
     }
     else if args.value_of("index").unwrap_or("") == "trustees" {
@@ -271,7 +298,24 @@ fn main() {
                         });
                     entry.orphan_aces.push(ace);
                 }
+                for (deleg, trustee) in res.delegations_missing {
+                    let entry = reindexed.entry(trustee.clone())
+                        .or_default()
+                        .entry(location.clone())
+                        .or_insert_with(|| {
+                            AdelegResult {
+                                non_canonical_ace: None,
+                                orphan_aces: vec![],
+                                delegations_found: vec![],
+                                delegations_missing: vec![],
+                            }
+                        });
+                    entry.delegations_missing.push((deleg, trustee));
+                }
                 for (deleg, trustee, aces) in res.delegations_found {
+                    if deleg.builtin && !show_builtin {
+                        continue;
+                    }
                     let entry = reindexed.entry(trustee.clone())
                         .or_default()
                         .entry(location.clone())
@@ -288,9 +332,6 @@ fn main() {
             } else {
                 warning_count += 1;
             }
-        }
-        if warning_count > 0 {
-            eprintln!(" [!] {} warnings were generated during analysis, some results may be incomplete. Use the resource view to see warnings.", warning_count);
         }
         for (trustee, locations) in &reindexed {
             println!("\n=== {}", engine.resolve_sid(trustee));
@@ -312,7 +353,7 @@ fn main() {
                         engine.describe_delegation_rights(&delegation.rights));
                 }
                 for (delegation, _, _) in &res.delegations_found {
-                    if !args.is_present("show_builtin") && delegation.builtin {
+                    if !show_builtin && delegation.builtin {
                         continue;
                     }
                     println!("            Documented delegation: {}",
@@ -321,17 +362,18 @@ fn main() {
             }
         }
         if warning_count > 0 {
-            eprintln!("\n [!] {} warnings were generated during analysis, some results may be incomplete. Use the resource view to see warnings.", warning_count);
+            std::io::stdout().flush();
+            eprintln!(" [!] {} warnings were generated during analysis, some results may be incomplete. Use the resource view to see warnings.", warning_count);
         }
     } else {
         let mut res: Vec<(&DelegationLocation, &Result<AdelegResult, AdelegError>)> = res.iter().collect();
         res.sort_by(|(loc_a, _), (loc_b, _)| loc_a.cmp(loc_b));
         for (location, res) in res {
             if let Ok(res) = &res {
-                if !res.needs_to_be_displayed(args.is_present("show_builtin")) {
+                if !res.needs_to_be_displayed(show_builtin) {
                     continue;
                 }
-            } else if args.is_present("hide-unreadable-warnings") {
+            } else if !show_warning_unreadable {
                 continue;
             }
 
@@ -362,21 +404,18 @@ fn main() {
                         ));
                 }
             }
-            if res.delegations_missing.iter().any(|(d, __)| !d.builtin) {
+            if !res.delegations_missing.is_empty() {
                 println!("       Delegations missing:");
                 for (delegation, trustee) in &res.delegations_missing {
-                    if delegation.builtin {
-                        continue;
-                    }
                     println!("         {} : {}", engine.resolve_sid(&trustee),
                         engine.describe_delegation_rights(&delegation.rights));
                 }
             }
             if res.delegations_found.iter().any(|(d, _, _)| !d.builtin) ||
-                    (!res.delegations_found.is_empty() && args.is_present("show_builtin")) {
+                    (!res.delegations_found.is_empty() && show_builtin) {
                 println!("       Documented delegations:");
                 for (delegation, trustee, aces) in &res.delegations_found {
-                    if !args.is_present("show_builtin") && delegation.builtin {
+                    if !show_builtin && delegation.builtin {
                         continue;
                     }
                     println!("         {} : {}", engine.resolve_sid(&trustee),

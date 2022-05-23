@@ -61,7 +61,7 @@ impl AdelegResult {
         if self.delegations_found.iter().any(|(d, _, _)| !d.builtin) || (!self.delegations_found.is_empty() && view_builtin_delegations) {
             return true;
         }
-        if self.delegations_missing.iter().any(|(d, _)| !d.builtin) {
+        if !self.delegations_missing.is_empty() {
             return true;
         }
         false
@@ -341,17 +341,6 @@ impl<'a> Engine<'a> {
                 }
             }
         }
-
-        // Only keep nodes for which we have something to say
-        res.retain(|_, res| {
-            if let Ok(res) = res {
-                if res.non_canonical_ace.is_none() && res.orphan_aces.is_empty() && res.delegations_missing.is_empty() && res.delegations_found.is_empty() {
-                    return false;
-                }
-            }
-            true
-        });
-
         Ok(res)
     }
 
@@ -428,7 +417,6 @@ impl<'a> Engine<'a> {
                 .unwrap_or(&self.root_domain.sid);
             let schema_aces = schema_aces.get(domain_sid).expect("naming context without an associated domain");
 
-            println!("Fetching security descriptors of naming context {}", naming_context);
             let explicit_aces = self.get_explicit_aces(&naming_context, schema_aces)?;
             res.extend(explicit_aces);
         }
@@ -436,8 +424,8 @@ impl<'a> Engine<'a> {
         // Move ACEs from "orphan" to "delegations found" if they match an expected delegation
         // Otherwise let them there, and add the delegation as "missing"
         for (trustee, expected_locations) in &expected_delegations {
-            for (location, delegations) in expected_locations {
-                for (expected_delegation, expected_aces) in delegations {
+            for (location, expected_delegations) in expected_locations {
+                for (expected_delegation, expected_aces) in expected_delegations {
                     let res = match res.get_mut(location) {
                         Some(Ok(res)) => res,
                         Some(Err(_)) => continue, // scanning that location failed, don't flag the delegation as "missing"
@@ -453,7 +441,9 @@ impl<'a> Engine<'a> {
                         }
                         res.delegations_found.push((expected_delegation.to_owned(), trustee.clone(), matched_aces));
                     } else {
-                        res.delegations_missing.push((expected_delegation.to_owned(), trustee.clone()));
+                        if !expected_delegation.builtin {
+                            res.delegations_missing.push((expected_delegation.to_owned(), trustee.clone()));
+                        }
                     }
 
                     res.orphan_aces = res.orphan_aces.drain(..).enumerate().filter(|(idx, ace)| !explained_aces[*idx]).map(|(idx, ace)| ace).collect();

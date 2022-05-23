@@ -200,14 +200,18 @@ impl Delegation {
                 if let Some(object_type) = &ace.object_type_name {
                     if let Some(guid) = resolve_object_type(object_type, schema) {
                         ace.object_type = Some(guid);
-                    } else {
+                    } else if !delegation.builtin { // only ignore missing object types on built-in delegations
                         return Err(format!("unknown object type \"{}\" referenced in delegation", object_type));
+                    } else {
+                        continue;
                     }
                 }
                 if let Some(inherited_object_type) = &ace.inherited_object_type_name {
                     if let Some(guid) = resolve_inherited_object_type(inherited_object_type, schema) {
                         ace.inherited_object_type = Some(guid);
-                    } else {
+                    } else if !delegation.builtin { // only ignore missing object types on built-in delegations
+                        return Err(format!("unknown inherited object type \"{}\" referenced in delegation", inherited_object_type));
+                    } else{
                         continue;
                     }
                 }
