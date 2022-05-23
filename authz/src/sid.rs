@@ -1,5 +1,6 @@
 use core::fmt::Debug;
 use std::convert::TryFrom;
+use windows::Win32::Security::EqualPrefixSid;
 use windows::Win32::Security::GetSidSubAuthority;
 use windows::Win32::Security::GetSidSubAuthorityCount;
 use core::ptr::null_mut;
@@ -57,6 +58,12 @@ impl Sid {
             let sub_auth_count =  *(GetSidSubAuthorityCount(PSID(self.bytes.as_ptr() as isize)));
             *(GetSidSubAuthority(PSID(self.bytes.as_ptr() as isize), (sub_auth_count - 1).into()))
         }
+    }
+
+    pub fn shares_prefix_with(&self, other: &Sid) -> bool {
+        unsafe {
+            EqualPrefixSid(PSID(self.as_bytes().as_ptr() as isize), PSID(other.as_bytes().as_ptr() as isize))
+        }.as_bool()
     }
 
     pub fn with_rid(&self, rid: u32) -> Self {

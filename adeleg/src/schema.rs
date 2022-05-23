@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use crate::utils::get_attr_guid;
 
 pub struct Schema {
-    // Mapping from class GUID to class name
+    // Mapping from class GUID to lowercase class name
     pub(crate) class_guids: HashMap<String, Guid>,
     // Mapping from attribute GUID to attribute name
     pub(crate) attribute_guids: HashMap<Guid, String>,
@@ -40,7 +40,7 @@ impl Schema {
             let entry = entry?;
             let guid = get_attr_guid(&[&entry], &entry.dn, "schemaidguid")?;
             let name = get_attr_str(&[&entry], &entry.dn, "ldapdisplayname")?;
-            class_guids.insert(name.clone(), guid);
+            class_guids.insert(name.clone().to_ascii_lowercase(), guid);
         }
 
         // Fetch attribute types

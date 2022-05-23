@@ -1,7 +1,9 @@
+use core::fmt::Display;
+use core::cell::RefCell;
 use core::ptr::null_mut;
 use std::collections::{HashMap, HashSet};
 use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_WRITE_DAC, ADS_RIGHT_READ_CONTROL, ADS_RIGHT_DS_LIST_OBJECT, ADS_RIGHT_ACCESS_SYSTEM_SECURITY, ADS_RIGHT_DELETE, ADS_RIGHT_DS_WRITE_PROP, ADS_RIGHT_DS_CREATE_CHILD, ADS_RIGHT_DS_DELETE_CHILD, ADS_RIGHT_DS_CONTROL_ACCESS, ADS_RIGHT_DS_SELF, ADS_RIGHT_DS_DELETE_TREE, ADS_RIGHT_ACTRL_DS_LIST, ADS_RIGHT_DS_READ_PROP, ADS_RIGHT_WRITE_OWNER};
-use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION};
+use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION, SidTypeUser, SidTypeGroup, SidTypeComputer};
 use windows::Win32::Networking::Ldap::{LDAP_SCOPE_BASE, LDAP_SCOPE_SUBTREE, LDAP_SERVER_SD_FLAGS_OID};
 use windows::Win32::Security::SID_NAME_USE;
 use windows::Win32::Foundation::{PSID, PSTR, PWSTR, GetLastError, BOOL};
@@ -29,6 +31,55 @@ pub const IGNORED_CONTROL_ACCESSES: &[&str] = &[
     "apply group policy", // applying a group policy does not mean we control it
     "allow a dc to create a clone of itself", // if an attacker can impersonate a DC, cloning to a new DC is the least of your worries
 ];
+
+#[derive(Debug, Clone)]
+pub enum PrincipalType {
+    User,
+    Group,
+    Computer,
+    External,
+}
+
+impl Display for PrincipalType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PrincipalType::User => f.write_str("User"),
+            PrincipalType::Group => f.write_str("Group"),
+            PrincipalType::Computer => f.write_str("Computer"),
+            PrincipalType::External => f.write_str("External"),
+        }
+    }
+}
+
+impl From<SID_NAME_USE> for PrincipalType {
+    fn from(siduse: SID_NAME_USE) -> Self {
+        if siduse == SidTypeUser {
+            PrincipalType::User
+        } else if siduse == SidTypeGroup {
+            PrincipalType::Group
+        } else if siduse == SidTypeComputer {
+            PrincipalType::Computer
+        } else {
+            PrincipalType::External
+        }
+    }
+}
+
+impl From<&str> for PrincipalType {
+    fn from(most_specific_class: &str) -> Self {
+        let most_specific_class = most_specific_class.to_ascii_lowercase();
+        if most_specific_class == "computer" {
+            PrincipalType::Computer
+        } else if most_specific_class == "user" {
+            PrincipalType::User
+        } else if most_specific_class == "group" {
+            PrincipalType::Group
+        } else {
+            PrincipalType::External
+        }
+    }
+}
+
 pub(crate) struct Engine<'a> {
     ldap: &'a LdapConnection,
     pub(crate) domains: Vec<Domain>,
@@ -39,12 +90,15 @@ pub(crate) struct Engine<'a> {
     resolve_names: bool,
     pub(crate) templates: HashMap<String, DelegationTemplate>,
     pub(crate) delegations: Vec<Delegation>,
+    resolved_sid_to_dn: RefCell<HashMap<Sid, String>>,
+    resolved_sid_to_type: RefCell<HashMap<Sid, PrincipalType>>,
     p_lookupaccountsidlocal: Option<unsafe extern "system" fn(PSID, PWSTR, *mut u32, PWSTR, *mut u32, *mut SID_NAME_USE) -> BOOL>,
 }
 
 #[derive(Debug, Clone)]
 pub struct AdelegResult {
     pub(crate) non_canonical_ace: Option<Ace>,
+    pub(crate) deleted_trustee: Vec<Ace>,
     pub(crate) orphan_aces: Vec<Ace>,
     pub(crate) delegations_found: Vec<(Delegation, Sid, Vec<Ace>)>,
     pub(crate) delegations_missing: Vec<(Delegation, Sid)>,
@@ -53,6 +107,9 @@ pub struct AdelegResult {
 impl AdelegResult {
     pub(crate) fn needs_to_be_displayed(&self, view_builtin_delegations: bool) -> bool {
         if self.non_canonical_ace.is_some() {
+            return true;
+        }
+        if !self.deleted_trustee.is_empty() {
             return true;
         }
         if !self.orphan_aces.is_empty() {
@@ -140,6 +197,8 @@ impl<'a> Engine<'a> {
             templates: HashMap::new(),
             delegations: Vec::new(),
             p_lookupaccountsidlocal,
+            resolved_sid_to_dn: RefCell::new(HashMap::new()),
+            resolved_sid_to_type: RefCell::new(HashMap::new()),
         }
     }
 
@@ -208,6 +267,7 @@ impl<'a> Engine<'a> {
                     None => continue,
                 };
                 let mut entry = AdelegResult {
+                    deleted_trustee: vec![],
                     orphan_aces: vec![],
                     non_canonical_ace: dacl.check_canonicality().err(),
                     delegations_found: vec![],
@@ -217,15 +277,9 @@ impl<'a> Engine<'a> {
                     if !self.is_ace_interesting(&ace, false, &[]) {
                         continue;
                     }
-
-                    // gMSA are hardcoded by design to not have their password reset, it is not a delegation.
-                    if class_name == "msDS-GroupManagedServiceAccount" && !ace.grants_access() && ace.access_mask == ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32 {
-                        continue;
-                    }
-
                     entry.orphan_aces.push(ace);
                 }
-                if !entry.orphan_aces.is_empty() {
+                if entry.needs_to_be_displayed(true) {
                     res.or_insert(Ok(entry));
                 }
             }
@@ -272,14 +326,8 @@ impl<'a> Engine<'a> {
         ]), &[&sd_control]);
     
         let mut res: HashMap<DelegationLocation, Result<AdelegResult, AdelegError>> = HashMap::new();
-    
-        // Keep track of objectSID -> DN while scanning objects, to ignore delegations to a SID on objects under a container with that SID
-        let mut object_sids = HashMap::new();
         for entry in search {
             let entry = entry?;
-            if let Ok(object_sid) = get_attr_sid(&[&entry], &entry.dn, "objectsid") {
-                object_sids.insert(object_sid, entry.dn.to_owned());
-            };
             let res = res.entry(DelegationLocation::Dn(entry.dn.clone()));
             let sd = match get_attr_sd(&[&entry], &entry.dn, "ntsecuritydescriptor") {
                 Ok(sd) => sd,
@@ -288,20 +336,29 @@ impl<'a> Engine<'a> {
                     continue;
                 },
             };
+            let most_specific_class = match get_attr_strs(&[&entry], &entry.dn, "objectclass") {
+                Ok(mut v) => v.pop().expect("assertion failed: object with an empty objectClass!?").to_ascii_lowercase(),
+                Err(e) => {
+                    res.or_insert(Err(AdelegError::LdapQueryFailed(e)));
+                    continue;
+                }
+            };
+            if let Ok(object_sid) = get_attr_sid(&[&entry], &entry.dn, "objectsid") {
+                self.resolved_sid_to_dn.borrow_mut().insert(object_sid.clone(), entry.dn.clone());
+                self.resolved_sid_to_type.borrow_mut().insert(object_sid.clone(), PrincipalType::from(most_specific_class.as_str()));
+            }
             let admincount = get_attr_str(&[&entry], &entry.dn, "admincount")
                 .unwrap_or("0".to_owned()) != "0";
             let dacl = sd.dacl.expect("assertion failed: object without a DACL!?");
 
             let mut record = AdelegResult {
                 non_canonical_ace: dacl.check_canonicality().err(),
+                deleted_trustee: vec![],
                 orphan_aces: vec![],
                 delegations_found: vec![],
                 delegations_missing: vec![],
             };
 
-            let most_specific_class = get_attr_strs(&[&entry], &entry.dn, "objectclass")?
-                .pop()
-                .expect("assertion failed: object without an objectClass!?");
             let default_aces = match schema_aces.get(&DelegationLocation::DefaultSecurityDescriptor(most_specific_class.clone())) {
                 Some(Ok(AdelegResult { orphan_aces, ..  })) => &orphan_aces[..],
                 _ => &[]
@@ -322,16 +379,18 @@ impl<'a> Engine<'a> {
                 }
                 record.orphan_aces.push(ace);
             }
-            res.or_insert(Ok(record));
+            if record.needs_to_be_displayed(true) {
+                res.or_insert(Ok(record));
+            }
         }
-    
+
         // Remove any ACE whose trustee is a parent object (parents control their child containers anyway,
         // e.g. computers control their BitLocker recovery information, TPM information, Hyper-V virtual machine objects, etc.)
         for (location, res) in res.iter_mut() {
             if let DelegationLocation::Dn(dn) = location {
                 if let Ok(res) = res {
                     res.orphan_aces.retain(|ace| {
-                        if let Some(trustee_dn) = object_sids.get(&ace.trustee) {
+                        if let Some(trustee_dn) = self.resolved_sid_to_dn.borrow().get(&ace.trustee) {
                             if ends_with_case_insensitive(dn, trustee_dn) {
                                 return false;
                             }
@@ -352,7 +411,7 @@ impl<'a> Engine<'a> {
         }
         let problematic_rights = ace.access_mask & !(IGNORED_ACCESS_RIGHTS);
         if problematic_rights == 0 {
-            return false; // ignore read-only ACEs which cannot be abused (e.g. to read LAPS passwords)
+            return false; // ignore read-only ACEs which cannot be abused
         }
         if ace.trustee == everyone && !ace.grants_access() &&
                 (ace.access_mask & !(ADS_RIGHT_DELETE.0 as u32 | ADS_RIGHT_DS_DELETE_CHILD.0 as u32 | ADS_RIGHT_DS_DELETE_TREE.0 as u32)) == 0 {
@@ -377,12 +436,10 @@ impl<'a> Engine<'a> {
                 }
             }
         }
-
         true
     }
 
-
-    // Results are indexed by location (DN, class name) -> (orphan ACEs, delegations missing, delegations in place)
+    // Results are indexed by location (DN or class name) -> (orphan ACEs, delegations missing, delegations in place)
     pub fn run(&self) -> Result<HashMap<DelegationLocation, Result<AdelegResult, AdelegError>>, LdapError> {
         // Derive expected ACEs from these delegations, and index these ACEs by Sid then Location
         let mut expected_delegations: HashMap<Sid, HashMap<DelegationLocation, Vec<(Delegation, Vec<Ace>)>>> = HashMap::new();
@@ -419,6 +476,22 @@ impl<'a> Engine<'a> {
 
             let explicit_aces = self.get_explicit_aces(&naming_context, schema_aces)?;
             res.extend(explicit_aces);
+
+            // Move ACEs from "orphan" to "deleted trustee" if the trustee is from this forest and does
+            // not exist anymore
+            let domain_sid = domain_sid.with_rid(0);
+            for (_, result) in res.iter_mut() {
+                if let Ok(result) = result {
+                    result.orphan_aces.retain(|ace| {
+                        if ace.trustee.shares_prefix_with(&domain_sid) && self.resolve_sid(&ace.trustee).is_none() {
+                            result.deleted_trustee.push(ace.clone());
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                }
+            }
         }
 
         // Move ACEs from "orphan" to "delegations found" if they match an expected delegation
@@ -704,14 +777,9 @@ impl<'a> Engine<'a> {
         res
     }
 
-    pub fn resolve_sid(&self, sid: &Sid) -> String {
-        let base = format!("<SID={}>", sid);
-        let search = LdapSearch::new(&self.ldap, Some(&base), LDAP_SCOPE_BASE, Some("(objectClass=*)"), Some(&["objectClass"]), &[]);
-        if let Ok(mut res) = search.collect::<Result<Vec<LdapEntry>, LdapError>>() {
-            if let Some(entry) = res.pop() {
-                let classes = get_attr_strs(&[&entry], &base, "objectclass").expect("unable to fetch objectClass");
-                return entry.dn.clone();
-            }
+    pub fn resolve_sid(&self, sid: &Sid) -> Option<(String, PrincipalType)> {
+        if let Some(dn) = self.resolved_sid_to_dn.borrow().get(sid) {
+            return Some((dn.clone(), self.resolved_sid_to_type.borrow().get(sid).cloned().unwrap_or(PrincipalType::External)));
         }
 
         // Try to resolve locally, in case it is a well known SID
@@ -730,16 +798,35 @@ impl<'a> Engine<'a> {
                 user_name.truncate(user_name_len as usize);
                 domain_name.truncate(domain_name_len as usize);
                 if !user_name.is_empty() {
-                    return if domain_name.is_empty() {
+                    let name = if domain_name.is_empty() {
                         String::from_utf16_lossy(&user_name)
                     } else {
                         format!("{}\\{}", String::from_utf16_lossy(&domain_name), String::from_utf16_lossy(&user_name))
-                    }
+                    };
+                    let ptype = PrincipalType::from(siduse);
+                    self.resolved_sid_to_dn.borrow_mut().insert(sid.clone(), name.clone());
+                    self.resolved_sid_to_type.borrow_mut().insert(sid.clone(), ptype.clone());
+                    return Some((name, ptype));
+                }
+            }
+        }
+        
+        let base = format!("<SID={}>", sid);
+        let search = LdapSearch::new(&self.ldap, Some(&base), LDAP_SCOPE_BASE, Some("(objectClass=*)"), Some(&["objectClass"]), &[]);
+        if let Ok(mut res) = search.collect::<Result<Vec<LdapEntry>, LdapError>>() {
+            if let Some(entry) = res.pop() {
+                if let Ok(mut classes) = get_attr_strs(&[&entry], &base, "objectclass") {
+                    let dn = entry.dn;
+                    let most_specific_class = classes.pop().expect("assertion failed: object with empty objectClass!?");
+                    let ptype = PrincipalType::from(most_specific_class.as_str());
+                    self.resolved_sid_to_dn.borrow_mut().insert(sid.clone(), dn.clone());
+                    self.resolved_sid_to_type.borrow_mut().insert(sid.clone(), ptype.clone());
+                    return Some((dn, ptype));
                 }
             }
         }
 
-        sid.to_string()
+        None
     }
 
     pub fn resolve_str_to_sid(&self, trustee: &str) -> Option<Sid> {

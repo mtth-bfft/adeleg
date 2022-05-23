@@ -7,7 +7,7 @@ mod gui;
 
 use std::io::Write;
 use std::collections::HashMap;
-use ntdsapi::DsConnection;
+use engine::PrincipalType;
 use utils::pwstr_to_str;
 use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::Networking::Ldap::LDAP_PORT;
@@ -211,6 +211,13 @@ fn main() {
             }
         };
         let mut writer = csv::Writer::from_writer(output);
+        writer.write_record(&[
+            "Resource",
+            "Trustee",
+            "Trustee type",
+            "Category",
+            "Details",
+        ]).expect("unable to write CSV record");
         for (location, res) in &res {
             let res = match res {
                 Ok(r) => r,
@@ -220,6 +227,7 @@ fn main() {
                         writer.write_record(&[
                             location.to_string().as_str(),
                             "",
+                            "Global",
                             "Warning",
                             &e.to_string(),
                         ]).expect("unable to write CSV record");
@@ -231,14 +239,26 @@ fn main() {
                 writer.write_record(&[
                     location.to_string().as_str(),
                     "",
+                    "Global",
                     "Warning",
                     &format!("ACL is not in canonical order, e.g. this ACE is out of order: {}", non_canonical_ace),
                 ]).expect("unable to write CSV record");
             }
-            for ace in &res.orphan_aces {
+            for ace in &res.deleted_trustee {
                 writer.write_record(&[
                     location.to_string().as_str(),
-                    engine.resolve_sid(&ace.trustee).as_str(),
+                    &ace.trustee.to_string(),
+                    "External",
+                    "Warning",
+                    "The trustee linked to this delegation does not exist anymore, it should be cleaned up",
+                ]).expect("unable to write CSV record");
+            }
+            for ace in &res.orphan_aces {
+                let (dn, ptype) = engine.resolve_sid(&ace.trustee).unwrap_or((ace.trustee.to_string(), PrincipalType::External));
+                writer.write_record(&[
+                    location.to_string().as_str(),
+                    &dn,
+                    &ptype.to_string(),
                     if ace.grants_access() { "Allow ACE" } else { "Deny ACE" },
                     engine.describe_ace(
                         ace.access_mask,
@@ -250,9 +270,11 @@ fn main() {
                 ]).expect("unable to write CSV record");
             }
             for (deleg, trustee) in &res.delegations_missing {
+                let (dn, ptype) = engine.resolve_sid(trustee).unwrap_or((trustee.to_string(), PrincipalType::External));
                 writer.write_record(&[
                     location.to_string().as_str(),
-                    engine.resolve_sid(&trustee).as_str(),
+                    &dn,
+                    &ptype.to_string(),
                     "Delegation (missing!)",
                     engine.describe_delegation_rights(&deleg.rights).as_str(),
                 ]).expect("unable to write CSV record");
@@ -261,10 +283,12 @@ fn main() {
                 if deleg.builtin && !show_builtin {
                     continue;
                 }
+                let (dn, ptype) = engine.resolve_sid(trustee).unwrap_or((trustee.to_string(), PrincipalType::External));
                 writer.write_record(&[
                     location.to_string().as_str(),
-                    engine.resolve_sid(&trustee).as_str(),
-                    "Delegation",
+                    &dn,
+                    &ptype.to_string(),
+                    if deleg.builtin { "Built-in" } else { "Delegation" },
                     engine.describe_delegation_rights(&deleg.rights).as_str(),
                 ]).expect("unable to write CSV record");
             }
@@ -273,7 +297,7 @@ fn main() {
         drop(writer);
         std::io::stdout().flush();
         if !show_warning_unreadable && warning_unreadable_count > 0 {
-            eprintln!(" [!] {} security descriptors could not be read, use --show-warning-unreadable to see where", warning_unreadable_count);
+            eprintln!("\n [!] {} security descriptors could not be read, use --show-warning-unreadable to see where", warning_unreadable_count);
         }
     }
     else if args.value_of("index").unwrap_or("") == "trustees" {
@@ -284,6 +308,9 @@ fn main() {
                 if res.non_canonical_ace.is_some() {
                     warning_count += 1;
                 }
+                if res.deleted_trustee.is_empty() {
+                    warning_count += 1;
+                }
                 for ace in res.orphan_aces {
                     let entry = reindexed.entry(ace.trustee.clone())
                         .or_default()
@@ -291,6 +318,7 @@ fn main() {
                         .or_insert_with(|| {
                             AdelegResult {
                                 non_canonical_ace: None,
+                                deleted_trustee: vec![],
                                 orphan_aces: vec![],
                                 delegations_found: vec![],
                                 delegations_missing: vec![],
@@ -305,6 +333,7 @@ fn main() {
                         .or_insert_with(|| {
                             AdelegResult {
                                 non_canonical_ace: None,
+                                deleted_trustee: vec![],
                                 orphan_aces: vec![],
                                 delegations_found: vec![],
                                 delegations_missing: vec![],
@@ -322,6 +351,7 @@ fn main() {
                         .or_insert_with(|| {
                             AdelegResult {
                                 non_canonical_ace: None,
+                                deleted_trustee: vec![],
                                 orphan_aces: vec![],
                                 delegations_found: vec![],
                                 delegations_missing: vec![],
@@ -334,7 +364,7 @@ fn main() {
             }
         }
         for (trustee, locations) in &reindexed {
-            println!("\n=== {}", engine.resolve_sid(trustee));
+            println!("\n=== {}", engine.resolve_sid(trustee).map(|(dn, _)| dn).unwrap_or(trustee.to_string()));
             for (location, res) in locations.iter() {
                 println!("       {} :", location);
                 for ace in &res.orphan_aces {
@@ -363,7 +393,7 @@ fn main() {
         }
         if warning_count > 0 {
             std::io::stdout().flush();
-            eprintln!(" [!] {} warnings were generated during analysis, some results may be incomplete. Use the resource view to see warnings.", warning_count);
+            eprintln!("\n [!] {} warnings were generated during analysis, some results may be incomplete. Use the resource view to see warnings.", warning_count);
         }
     } else {
         let mut res: Vec<(&DelegationLocation, &Result<AdelegResult, AdelegError>)> = res.iter().collect();
@@ -373,8 +403,11 @@ fn main() {
                 if !res.needs_to_be_displayed(show_builtin) {
                     continue;
                 }
-            } else if !show_warning_unreadable {
-                continue;
+            } else {
+                warning_unreadable_count += 1;
+                if !show_warning_unreadable {
+                    continue;
+                }
             }
 
             println!("\n=== {}", &location);
@@ -388,13 +421,18 @@ fn main() {
             if let Some(ace) = &res.non_canonical_ace {
                 println!("       /!\\ ACL is not in canonical order, e.g. see ACE: {}", ace);
             }
-
+            if !res.deleted_trustee.is_empty() {
+                println!("       /!\\ ACEs for trustees which do not exist anymore and should be cleaned up:");
+                for ace in &res.deleted_trustee {
+                    println!("         {}", &ace.trustee);
+                }
+            }
             if !res.orphan_aces.is_empty() {
                 println!("       ACEs:");
                 for ace in &res.orphan_aces {
                     println!("         {} {} : {}",
                         if ace.grants_access() { "Allow" } else { "Deny" },
-                        engine.resolve_sid(&ace.trustee),
+                        engine.resolve_sid(&ace.trustee).map(|(dn, _)| dn).unwrap_or(ace.trustee.to_string()),
                         engine.describe_ace(
                             ace.access_mask,
                             ace.get_object_type(),
@@ -407,7 +445,7 @@ fn main() {
             if !res.delegations_missing.is_empty() {
                 println!("       Delegations missing:");
                 for (delegation, trustee) in &res.delegations_missing {
-                    println!("         {} : {}", engine.resolve_sid(&trustee),
+                    println!("         {} : {}", engine.resolve_sid(&trustee).map(|(dn, _)| dn).unwrap_or(trustee.to_string()),
                         engine.describe_delegation_rights(&delegation.rights));
                 }
             }
@@ -418,10 +456,15 @@ fn main() {
                     if !show_builtin && delegation.builtin {
                         continue;
                     }
-                    println!("         {} : {}", engine.resolve_sid(&trustee),
+                    println!("         {} : {}", engine.resolve_sid(&trustee).map(|(dn, _)| dn).unwrap_or(trustee.to_string()),
                         engine.describe_delegation_rights(&delegation.rights));
                 }
             }
+        }
+
+        if !show_warning_unreadable && warning_unreadable_count > 0 {
+            std::io::stdout().flush();
+            eprintln!("\n [!] {} security descriptors could not be read, use --show-warning-unreadable to see where", warning_unreadable_count);
         }
     }
 }

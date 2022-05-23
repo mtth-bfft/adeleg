@@ -104,13 +104,21 @@ impl BasicApp {
         self.list.set_headers_enabled(true);
         let (width, _) = self.list.size();
         self.list.insert_column(nwg::InsertListViewColumn {
-            width: Some((std::cmp::min(width/2, 200) - 10) as i32),
+            index: Some(0),
+            width: Some(100),
+            text: Some("Type".to_owned()),
+            ..Default::default()
+        });
+        self.list.insert_column(nwg::InsertListViewColumn {
+            index: Some(1),
+            width: Some((std::cmp::max(width/2, 200) - 55) as i32),
             text: Some("".to_owned()),
             ..Default::default()
         });
         self.list.insert_column(nwg::InsertListViewColumn {
+            index: Some(2),
             text: Some("Details".to_owned()),
-            width: Some((std::cmp::min(width/2, 200) - 10) as i32),
+            width: Some((std::cmp::max(width/2, 450) - 55) as i32),
             ..Default::default()
         });
         self.refresh();
@@ -224,7 +232,7 @@ impl BasicApp {
 
     fn trustee_to_tree_path(&self, trustee: &Sid) -> Vec<String> {
         let engine = self.engine.as_ref().unwrap().borrow();
-        let dn = engine.resolve_sid(trustee);
+        let dn = engine.resolve_sid(trustee).map(|(dn, _)| dn).unwrap_or(trustee.to_string());
 
         // Naming contexts overlap: we need to get the longest matching suffix (DC=DomainDnsZones,DC=example,DC=com
         // and not DC=example,DC=com)
@@ -359,9 +367,9 @@ impl BasicApp {
         let results = self.results.as_ref().unwrap().borrow();
 
         if view_by_trustee {
-            self.list.update_column(0, nwg::InsertListViewColumn {
+            self.list.update_column(1, nwg::InsertListViewColumn {
                 text: Some("Resource".to_owned()),
-                width: Some(self.list.column(0, 100).expect("unable to fetch column 0").width),
+                width: Some(self.list.column(1, 100).expect("unable to fetch column 1").width),
                 ..Default::default()
             });
             let mut trustees: HashSet<Sid> = HashSet::new();
@@ -412,9 +420,9 @@ impl BasicApp {
                 }
             }
         } else {
-            self.list.update_column(0, nwg::InsertListViewColumn {
+            self.list.update_column(1, nwg::InsertListViewColumn {
                 text: Some("Trustee".to_owned()),
-                width: Some(self.list.column(0, 100).expect("unable to fetch column 0").width),
+                width: Some(self.list.column(1, 100).expect("unable to fetch column 1").width),
                 ..Default::default()
             });
             let mut results: Vec<(&DelegationLocation, &Result<AdelegResult, AdelegError>)> = results.iter().collect();
@@ -524,6 +532,7 @@ impl BasicApp {
         let engine = self.engine.as_ref().unwrap().borrow();
 
         self.list.clear();
+
         if view_by_trustees {
             let trustee = self.tree_path_to_trustee(&path);
             for (location, result) in results.iter() {
@@ -535,12 +544,18 @@ impl BasicApp {
                         self.list.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 0,
-                            text: Some(location.to_string()),
+                            text: Some(if ace.grants_access() { "Allow ACE" } else { "Deny ACE" }.to_owned()),
                             image: None,
                         });
                         self.list.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 1,
+                            text: Some(location.to_string()),
+                            image: None,
+                        });
+                        self.list.insert_item(nwg::InsertListViewItem {
+                            index: Some(0),
+                            column_index: 2,
                             text: Some(engine.describe_ace(
                                 ace.access_mask,
                                 ace.get_object_type(),
@@ -558,12 +573,18 @@ impl BasicApp {
                         self.list.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 0,
-                            text: Some(location.to_string()),
+                            text: Some("Missing delegation".to_owned()),
                             image: None,
                         });
                         self.list.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 1,
+                            text: Some(location.to_string()),
+                            image: None,
+                        });
+                        self.list.insert_item(nwg::InsertListViewItem {
+                            index: Some(0),
+                            column_index: 2,
                             text: Some(engine.describe_delegation_rights(&delegation.rights)),
                             image: None,
                         });
@@ -575,12 +596,18 @@ impl BasicApp {
                         self.list.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 0,
-                            text: Some(location.to_string()),
+                            text: Some(if delegation.builtin { "Built-in" } else { "Delegation" }.to_owned()),
                             image: None,
                         });
                         self.list.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 1,
+                            text: Some(location.to_string()),
+                            image: None,
+                        });
+                        self.list.insert_item(nwg::InsertListViewItem {
+                            index: Some(0),
+                            column_index: 2,
                             text: Some(engine.describe_delegation_rights(&delegation.rights)),
                             image: None,
                         });
@@ -597,12 +624,18 @@ impl BasicApp {
                             self.list.insert_item(nwg::InsertListViewItem {
                                 index: Some(0),
                                 column_index: 0,
-                                text: None,
+                                text: Some("Warning".to_owned()),
                                 image: None,
                             });
                             self.list.insert_item(nwg::InsertListViewItem {
                                 index: Some(0),
                                 column_index: 1,
+                                text: None,
+                                image: None,
+                            });
+                            self.list.insert_item(nwg::InsertListViewItem {
+                                index: Some(0),
+                                column_index: 2,
                                 text: Some(e.to_string()),
                                 image: None,
                             });
@@ -615,12 +648,18 @@ impl BasicApp {
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 0,
-                        text: Some(engine.resolve_sid(&ace.trustee)),
+                        text: Some(if ace.grants_access() { "Allow ACE" } else { "Deny ACE "}.to_owned()),
                         image: None,
                     });
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 1,
+                        text: Some(engine.resolve_sid(&ace.trustee).map(|(dn, _)| dn).unwrap_or(ace.trustee.to_string())),
+                        image: None,
+                    });
+                    self.list.insert_item(nwg::InsertListViewItem {
+                        index: Some(0),
+                        column_index: 2,
                         text: Some(engine.describe_ace(
                             ace.access_mask,
                             ace.get_object_type(),
@@ -638,12 +677,18 @@ impl BasicApp {
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 0,
-                        text: Some(engine.resolve_sid(&trustee)),
+                        text: Some("Missing delegation".to_owned()),
                         image: None,
                     });
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 1,
+                        text: Some(engine.resolve_sid(&trustee).map(|(dn, _)| dn).unwrap_or(trustee.to_string())),
+                        image: None,
+                    });
+                    self.list.insert_item(nwg::InsertListViewItem {
+                        index: Some(0),
+                        column_index: 2,
                         text: Some(engine.describe_delegation_rights(&delegation.rights)),
                         image: None,
                     });
@@ -655,12 +700,18 @@ impl BasicApp {
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 0,
-                        text: Some(engine.resolve_sid(&trustee)),
+                        text: Some(if delegation.builtin { "Built-in" } else { "Delegation" }.to_owned()),
                         image: None,
                     });
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 1,
+                        text: Some(engine.resolve_sid(&trustee).map(|(dn, _)| dn).unwrap_or(trustee.to_string())),
+                        image: None,
+                    });
+                    self.list.insert_item(nwg::InsertListViewItem {
+                        index: Some(0),
+                        column_index: 2,
                         text: Some(engine.describe_delegation_rights(&delegation.rights)),
                         image: None,
                     });

@@ -339,7 +339,7 @@ impl Delegation {
 }
 
 fn resolve_object_type(name: &str, schema: &Schema) -> Option<Guid> {
-    if let Some(guid) = schema.class_guids.get(name) {
+    if let Some(guid) = schema.class_guids.get(&name.to_ascii_lowercase()) {
         return Some(guid.clone());
     }
     for (guid, attr_name) in &schema.attribute_guids {
@@ -369,12 +369,13 @@ fn resolve_object_type(name: &str, schema: &Schema) -> Option<Guid> {
 }
 
 fn resolve_inherited_object_type(name: &str, schema: &Schema) -> Option<Guid> {
+    let name = name.to_ascii_lowercase();
     for (class_name, class_guid) in &schema.class_guids {
-        if class_name == name {
+        if class_name == &name {
             return Some(class_guid.clone());
         }
     }
-    if let Ok(guid) = Guid::try_from(name) {
+    if let Ok(guid) = Guid::try_from(name.as_str()) {
         return Some(guid);
     }
     None
