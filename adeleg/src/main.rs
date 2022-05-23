@@ -224,8 +224,8 @@ fn main() {
                     if show_warning_unreadable {
                         writer.write_record(&[
                             location.to_string().as_str(),
-                            "",
                             "Global",
+                            "External",
                             "Warning",
                             &e.to_string(),
                         ]).expect("unable to write CSV record");
@@ -233,11 +233,20 @@ fn main() {
                     continue;
                 },
             };
+            if res.dacl_protected {
+                writer.write_record(&[
+                    location.to_string().as_str(),
+                    "Global",
+                    "External",
+                    "Warning",
+                    "DACL is configured to block inheritance of parent container ACEs",
+                ]).expect("unable to write CSV record");
+            }
             if let Some(non_canonical_ace) = &res.non_canonical_ace {
                 writer.write_record(&[
                     location.to_string().as_str(),
-                    "",
                     "Global",
+                    "External",
                     "Warning",
                     &format!("ACL is not in canonical order, e.g. this ACE is out of order: {}", non_canonical_ace),
                 ]).expect("unable to write CSV record");
@@ -315,6 +324,7 @@ fn main() {
                         .entry(location.clone())
                         .or_insert_with(|| {
                             AdelegResult {
+                                dacl_protected: false,
                                 non_canonical_ace: None,
                                 deleted_trustee: vec![],
                                 orphan_aces: vec![],
@@ -330,6 +340,7 @@ fn main() {
                         .entry(location.clone())
                         .or_insert_with(|| {
                             AdelegResult {
+                                dacl_protected: false,
                                 non_canonical_ace: None,
                                 deleted_trustee: vec![],
                                 orphan_aces: vec![],
@@ -348,6 +359,7 @@ fn main() {
                         .entry(location.clone())
                         .or_insert_with(|| {
                             AdelegResult {
+                                dacl_protected: false,
                                 non_canonical_ace: None,
                                 deleted_trustee: vec![],
                                 orphan_aces: vec![],
@@ -416,6 +428,9 @@ fn main() {
                     continue;
                 },
             };
+            if res.dacl_protected {
+                println!("       /!\\ ACL is configured to block inheritance of parent container ACEs");
+            }
             if let Some(ace) = &res.non_canonical_ace {
                 println!("       /!\\ ACL is not in canonical order, e.g. see ACE: {}", ace);
             }

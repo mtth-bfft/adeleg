@@ -642,7 +642,68 @@ impl BasicApp {
                         return;
                     },
                 };
-    
+                if result.dacl_protected {
+                    self.list.insert_item(nwg::InsertListViewItem {
+                        index: Some(0),
+                        column_index: 0,
+                        text: Some("Warning".to_owned()),
+                        image: None,
+                    });
+                    self.list.insert_item(nwg::InsertListViewItem {
+                        index: Some(0),
+                        column_index: 1,
+                        text: Some("Global".to_owned()),
+                        image: None,
+                    });
+                    self.list.insert_item(nwg::InsertListViewItem {
+                        index: Some(0),
+                        column_index: 2,
+                        text: Some("DACL is configured to block inheritance of parent container ACEs".to_owned()),
+                        image: None,
+                    });
+                }
+                if let Some(ace) = &result.non_canonical_ace {
+                    self.list.insert_item(nwg::InsertListViewItem {
+                        index: Some(0),
+                        column_index: 0,
+                        text: Some("Warning".to_owned()),
+                        image: None,
+                    });
+                    self.list.insert_item(nwg::InsertListViewItem {
+                        index: Some(0),
+                        column_index: 1,
+                        text: Some("Global".to_owned()),
+                        image: None,
+                    });
+                    self.list.insert_item(nwg::InsertListViewItem {
+                        index: Some(0),
+                        column_index: 2,
+                        text: Some(format!("DACL is not in canonical order, e.g. see ACE: {}", ace)),
+                        image: None,
+                    });
+                }
+
+                for ace in &result.deleted_trustee {
+                    self.list.insert_item(nwg::InsertListViewItem {
+                        index: Some(0),
+                        column_index: 0,
+                        text: Some("Warning".to_owned()),
+                        image: None,
+                    });
+                    self.list.insert_item(nwg::InsertListViewItem {
+                        index: Some(0),
+                        column_index: 1,
+                        text: Some("Global".to_owned()),
+                        image: None,
+                    });
+                    self.list.insert_item(nwg::InsertListViewItem {
+                        index: Some(0),
+                        column_index: 2,
+                        text: Some(format!("A delegation for trustee {} which does not exist anymore should be cleaned up", ace.trustee)),
+                        image: None,
+                    });
+                }
+
                 for ace in &result.orphan_aces {
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
@@ -666,7 +727,7 @@ impl BasicApp {
                             ace.get_container_inherit(),
                             ace.get_inherit_only()
                         )),
-                    image: None,
+                        image: None,
                     });
                 }
                 for (delegation, trustee) in &result.delegations_missing {

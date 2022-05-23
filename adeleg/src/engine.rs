@@ -8,6 +8,7 @@ use windows::Win32::Security::SID_NAME_USE;
 use windows::Win32::Foundation::{PSID, PSTR, PWSTR, BOOL};
 use authz::{SecurityDescriptor, Sid, Ace};
 use windows::Win32::System::LibraryLoader::{LoadLibraryA, GetProcAddress};
+use windows::Win32::System::SystemServices::SE_DACL_PROTECTED;
 use winldap::connection::LdapConnection;
 use winldap::utils::{get_attr_strs, get_attr_str};
 use winldap::search::{LdapSearch, LdapEntry};
@@ -29,6 +30,16 @@ pub const IGNORED_ACCESS_RIGHTS: u32 = (ADS_RIGHT_READ_CONTROL.0 |
 pub const IGNORED_CONTROL_ACCESSES: &[&str] = &[
     "apply group policy", // applying a group policy does not mean we control it
     "allow a dc to create a clone of itself", // if an attacker can impersonate a DC, cloning to a new DC is the least of your worries
+];
+
+pub const IGNORED_BLOCK_DACL_CLASSES: &[&str] = &[
+    "grouppolicycontainer", // GPOs block inheritance by design, due to the way Group Policy Creator Owner is delegated
+];
+
+pub const IGNORED_BLOCK_DACL_DOMAIN_CONTAINERS: &[&str] = &[
+    "CN=AdminSDHolder,CN=System", // AdminSDHolder, for SDProp to protect administrators
+    "CN=WMIPolicy,CN=System", // by design, due to the way Group Policy Creator Owner is delegated
+    "CN=SOM,CN=WMIPolicy,CN=System", // by design, due to the way Group Policy Creator Owner is delegated
 ];
 
 #[derive(Debug, Clone)]
@@ -97,6 +108,7 @@ pub(crate) struct Engine<'a> {
 
 #[derive(Debug, Clone)]
 pub struct AdelegResult {
+    pub(crate) dacl_protected: bool,
     pub(crate) non_canonical_ace: Option<Ace>,
     pub(crate) deleted_trustee: Vec<Ace>,
     pub(crate) orphan_aces: Vec<Ace>,
@@ -106,6 +118,9 @@ pub struct AdelegResult {
 
 impl AdelegResult {
     pub(crate) fn needs_to_be_displayed(&self, view_builtin_delegations: bool) -> bool {
+        if self.dacl_protected {
+            return true;
+        }
         if self.non_canonical_ace.is_some() {
             return true;
         }
@@ -269,11 +284,14 @@ impl<'a> Engine<'a> {
                         continue;
                     },
                 };
+                let dacl_protected = (sd.controls as u32 & SE_DACL_PROTECTED) != 0 &&
+                    !IGNORED_BLOCK_DACL_CLASSES.contains(&class_name.to_ascii_lowercase().as_str());
                 let dacl = match sd.dacl {
                     Some(acl) => acl,
                     None => continue,
                 };
                 let mut entry = AdelegResult {
+                    dacl_protected,
                     deleted_trustee: vec![],
                     orphan_aces: vec![],
                     non_canonical_ace: dacl.check_canonicality().err(),
@@ -358,7 +376,18 @@ impl<'a> Engine<'a> {
                 .unwrap_or("0".to_owned()) != "0";
             let dacl = sd.dacl.expect("assertion failed: object without a DACL!?");
 
+            let (default_aces, default_dacl_protected) = match schema_aces.get(&DelegationLocation::DefaultSecurityDescriptor(most_specific_class.clone())) {
+                Some(Ok(AdelegResult { dacl_protected, orphan_aces, ..  })) => (&orphan_aces[..], *dacl_protected),
+                _ => (&[] as &[Ace], false),
+            };
+            let dacl_protected = ((sd.controls as u32 & SE_DACL_PROTECTED) != 0) &&
+                !default_dacl_protected &&
+                !admincount &&
+                !IGNORED_BLOCK_DACL_CLASSES.contains(&most_specific_class.to_ascii_lowercase().as_str()) &&
+                !IGNORED_BLOCK_DACL_DOMAIN_CONTAINERS.iter().any(|rdn| entry.dn.eq_ignore_ascii_case(&format!("{},{}", rdn, naming_context)));
+
             let mut record = AdelegResult {
+                dacl_protected,
                 non_canonical_ace: dacl.check_canonicality().err(),
                 deleted_trustee: vec![],
                 orphan_aces: vec![],
@@ -366,10 +395,6 @@ impl<'a> Engine<'a> {
                 delegations_missing: vec![],
             };
 
-            let default_aces = match schema_aces.get(&DelegationLocation::DefaultSecurityDescriptor(most_specific_class.clone())) {
-                Some(Ok(AdelegResult { orphan_aces, ..  })) => &orphan_aces[..],
-                _ => &[]
-            };
             // Derive ACEs from the defaultSecurityDescriptor of the object's class, and see if the ACE is a default.
             // These ACEs are not simply memcpy()ed, they are treated as if the object had inherited them from the schema.
             let owner = sd.owner.as_ref().expect("assertion failed: object without an owner!?");
