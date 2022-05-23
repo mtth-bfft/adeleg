@@ -20,7 +20,7 @@ pub struct BasicApp {
     delegation_file_paths: RefCell<Vec<String>>,
     view_by_trustee: RefCell<bool>,
     view_builtin_delegations: RefCell<bool>,
-    hide_unreadable_warnings: RefCell<bool>,
+    show_unreadable_warnings: RefCell<bool>,
     results: Option<RefCell<HashMap<DelegationLocation, Result<AdelegResult, AdelegError>>>>,
 
     #[nwg_control(maximized: true, title: "ADeleg", flags: "MAIN_WINDOW|VISIBLE")]
@@ -150,9 +150,9 @@ impl BasicApp {
     }
 
     fn toggle_view_unreadable_warnings(&self) {
-        let prev = *(self.hide_unreadable_warnings.borrow());
+        let prev = *(self.show_unreadable_warnings.borrow());
 
-        *self.hide_unreadable_warnings.borrow_mut() = !prev;
+        *self.show_unreadable_warnings.borrow_mut() = !prev;
         self.redraw();
     }
 
@@ -356,11 +356,11 @@ impl BasicApp {
     fn redraw(&self) {
         let view_by_trustee = *self.view_by_trustee.borrow();
         let view_builtin_delegations = *self.view_builtin_delegations.borrow();
-        let hide_unreadable_warnings = *self.hide_unreadable_warnings.borrow();
+        let show_unreadable_warnings = *self.show_unreadable_warnings.borrow();
         self.menu_view_index_by_resources.set_checked(!view_by_trustee);
         self.menu_view_index_by_trustees.set_checked(view_by_trustee);
         self.menu_view_builtin_delegations.set_checked(view_builtin_delegations);
-        self.menu_view_unreadable_warnings.set_checked(!hide_unreadable_warnings);
+        self.menu_view_unreadable_warnings.set_checked(show_unreadable_warnings);
         self.window.focus();
         self.tree_view.clear();
         let results = self.results.as_ref().unwrap().borrow();
@@ -431,7 +431,7 @@ impl BasicApp {
                     if !res.needs_to_be_displayed(view_builtin_delegations) {
                         continue;
                     }
-                } else if hide_unreadable_warnings {
+                } else if !show_unreadable_warnings {
                     continue;
                 }
                 let mut parent = None;
@@ -526,7 +526,7 @@ impl BasicApp {
 
         let view_by_trustees = *self.view_by_trustee.borrow();
         let view_builtin_delegations = *self.view_builtin_delegations.borrow();
-        let hide_unreadable_warnings = *self.hide_unreadable_warnings.borrow();
+        let show_unreadable_warnings = *self.show_unreadable_warnings.borrow();
         let results = self.results.as_ref().unwrap().borrow();
         let engine = self.engine.as_ref().unwrap().borrow();
 
@@ -619,7 +619,7 @@ impl BasicApp {
                 let result = match result {
                     Ok(res) => res,
                     Err(e) => {
-                        if !hide_unreadable_warnings {
+                        if show_unreadable_warnings {
                             self.list.insert_item(nwg::InsertListViewItem {
                                 index: Some(0),
                                 column_index: 0,
