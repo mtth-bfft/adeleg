@@ -767,6 +767,14 @@
     },
     {
         "trustee": { "sid": "S-1-1-0" },
+        "resource": { "default_security_descriptor": "msDS-GroupManagedServiceAccount" },
+        "allow": false,
+        "access_mask": 256,
+        "object_type": "Reset Password",
+        "builtin": true
+    },
+    {
+        "trustee": { "sid": "S-1-1-0" },
         "resource": { "default_security_descriptor": "msDS-QuotaContainer" },
         "access_mask": 256,
         "object_type": "Query Self Quota",
