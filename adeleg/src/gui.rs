@@ -846,7 +846,7 @@ pub struct ConnectionDialog {
     #[nwg_events(OnButtonClick: [ConnectionDialog::handle_switch_mode])]
     choice_explicit: nwg::RadioButton,
 
-    #[nwg_control(placeholder_text: Some("Hostname (dc.hostname.example.com)"), text: "192.168.58.10")]
+    #[nwg_control(placeholder_text: Some("Hostname (dc.hostname.example.com)"))]
     #[nwg_layout_item(layout: grid, row: 2, col: 0)]
     dc_hostname: nwg::TextInput,
 
@@ -854,15 +854,15 @@ pub struct ConnectionDialog {
     #[nwg_layout_item(layout: grid, row: 3, col: 0)]
     dc_port: nwg::TextInput,
 
-    #[nwg_control(placeholder_text: Some("Domain name"), text: "EXAMPLE")]
+    #[nwg_control(placeholder_text: Some("Domain name"))]
     #[nwg_layout_item(layout: grid, row: 4, col: 0)]
     domain: nwg::TextInput,
 
-    #[nwg_control(placeholder_text: Some("Username"), text: "noright")]
+    #[nwg_control(placeholder_text: Some("Username"))]
     #[nwg_layout_item(layout: grid, row: 5, col: 0)]
     username: nwg::TextInput,
 
-    #[nwg_control(placeholder_text: Some("Password"), password: Some('*'), text: "Bonjour1!")]
+    #[nwg_control(placeholder_text: Some("Password"), password: Some('*'))]
     #[nwg_layout_item(layout: grid, row: 6, col: 0)]
     password: nwg::TextInput,
 
