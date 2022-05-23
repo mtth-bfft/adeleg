@@ -6,6 +6,9 @@ mod engine;
 mod gui;
 
 use std::collections::HashMap;
+use ntdsapi::DsConnection;
+use utils::pwstr_to_str;
+use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::Networking::Ldap::LDAP_PORT;
 use clap::{App, Arg};
 use authz::Sid;
@@ -115,23 +118,33 @@ fn main() {
             std::process::exit(1);
         }
     };
+    let mut password = String::with_capacity(100);
     let credentials = match (args.value_of("domain"),
                              args.value_of("username"),
                              args.value_of("password")) {
-        (Some(d), Some(u), Some(p)) => {
-            Some(LdapCredentials {
-                domain: d,
-                username: u,
-                password: p,
-            })
+        (Some(d), Some(u), None) | (Some(d), Some(u), Some("*")) => {
+            crate::utils::read_password(&mut password, &format!("Password for {}\\{}", d, u));
+            Some((d, u, password.as_str()))
         },
+        (Some(d), Some(u), Some(p)) => Some((d, u, p)),
         _ => None,
     };
 
-    let conn = match LdapConnection::new(server, port, credentials.as_ref()) {
+    let (server, port) = if let Some(server) = server {
+        (server.to_owned(), port)
+    } else {
+        if let Some((server, port)) = utils::get_gc_domain_controller() {
+            (server, port)
+        } else {
+            eprintln!(" [!] Unable to find a domain controller automatically, please specify one manually using --server");
+            std::process::exit(1);
+        }
+    };
+
+    let conn = match LdapConnection::new(&server, port, credentials) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Unable to connect to \"{}:{}\" : {}", server.unwrap_or("default"), port, e);
+            eprintln!("Unable to establish LDAP connection to \"{}:{}\" : {}", server, port, e);
             std::process::exit(1);
         }
     };

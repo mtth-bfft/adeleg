@@ -693,6 +693,8 @@ pub(crate) fn run_gui() {
 
 #[derive(Default, NwgUi)]
 pub struct ConnectionDialog {
+    server_port: RefCell<Option<(String, u16)>>,
+
     #[nwg_control(size: (500, 290), center: true, title: "ADeleg | LDAP Connection", flags: "WINDOW|VISIBLE")]
     #[nwg_events(
         OnInit: [ConnectionDialog::init],
@@ -741,7 +743,13 @@ pub struct ConnectionDialog {
 
 impl ConnectionDialog {
     fn init(&self) {
-        self.choice_dclocator.set_check_state(nwg::RadioButtonState::Checked);
+        if let Some((server, port)) = crate::utils::get_gc_domain_controller() {
+            *self.server_port.borrow_mut() = Some((server, port));
+            self.choice_dclocator.set_check_state(nwg::RadioButtonState::Checked);
+        } else {
+            self.choice_dclocator.set_enabled(false);
+            self.choice_explicit.set_check_state(nwg::RadioButtonState::Checked);
+        }
         self.handle_switch_mode();
         self.connect_btn.focus();
     }
@@ -761,7 +769,7 @@ impl ConnectionDialog {
         let domain = self.domain.text();
         let username = self.username.text();
         let password = self.password.text();
-        let dc_port: u16 = self.dc_port.text().trim().parse().unwrap_or(389);
+        let port: u16 = self.dc_port.text().trim().parse().unwrap_or(389);
 
         let (server, credentials) = if explicit {
             if domain.is_empty() && username.is_empty() {
@@ -771,17 +779,23 @@ impl ConnectionDialog {
                     BasicApp::show_error("Invalid parameters: when specifying an explicit username or domain, both must be specified");
                     return;
                 }
-                (Some(dc_hostname), Some(LdapCredentials {
-                    domain: &domain,
-                    username: &username,
-                    password: &password,
-                }))
+                (Some(dc_hostname), Some((domain.as_str(), username.as_str(), password.as_str())))
             }
         } else {
             (None , None)
         };
+        let (server, port) = if let Some(server) = server {
+            (server, port)
+        } else {
+            if let Some((server, port)) = self.server_port.borrow().as_ref() {
+                (server.clone(), *port)
+            } else {
+                BasicApp::show_error("Unable to find a domain controller automatically, please specify one manually");
+                return;
+            }
+        };
 
-        let ldap = match LdapConnection::new(server.as_deref(), dc_port, credentials.as_ref()) {
+        let ldap = match LdapConnection::new(&server, port, credentials) {
             Ok(conn) => conn,
             Err(e) => {
                 BasicApp::show_error(&format!("Unable to connect: {}", e));

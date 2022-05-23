@@ -1,7 +1,14 @@
 use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_DS_DELETE_CHILD, ADS_RIGHT_ACTRL_DS_LIST, ADS_RIGHT_DS_SELF, ADS_RIGHT_DS_READ_PROP, ADS_RIGHT_DS_WRITE_PROP, ADS_RIGHT_DS_DELETE_TREE, ADS_RIGHT_DS_LIST_OBJECT, ADS_RIGHT_DS_CONTROL_ACCESS, ADS_RIGHT_DELETE, ADS_RIGHT_READ_CONTROL, ADS_RIGHT_WRITE_DAC, ADS_RIGHT_WRITE_OWNER, ADS_RIGHT_SYNCHRONIZE, ADS_RIGHT_ACCESS_SYSTEM_SECURITY, ADS_RIGHT_GENERIC_READ, ADS_RIGHT_GENERIC_WRITE, ADS_RIGHT_GENERIC_EXECUTE, ADS_RIGHT_GENERIC_ALL, ADS_RIGHT_DS_CREATE_CHILD};
 use windows::Win32::Security::{CONTAINER_INHERIT_ACE, NO_PROPAGATE_INHERIT_ACE, OBJECT_INHERIT_ACE, INHERIT_ONLY_ACE};
 use windows::Win32::Networking::Ldap::{LDAP_SCOPE_BASE, LDAP_SCOPE_SUBTREE, LDAP_SCOPE_ONELEVEL};
+use windows::Win32::NetworkManagement::NetManagement::NetApiBufferFree;
+use windows::Win32::Networking::ActiveDirectory::{DsGetDcNameW, DS_GC_SERVER_REQUIRED, DS_DIRECTORY_SERVICE_REQUIRED, DS_RETURN_DNS_NAME, DOMAIN_CONTROLLER_INFOW};
+use windows::Win32::System::Console::{GetConsoleMode, CONSOLE_MODE, SetConsoleMode, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT};
+use windows::Win32::Foundation::ERROR_SUCCESS;
+use std::os::windows::prelude::AsRawHandle;
+use std::io::{Write, BufRead};
 use core::borrow::Borrow;
+use core::ptr::null_mut;
 use authz::{Ace, Sid, SecurityDescriptor, Guid};
 use winldap::connection::LdapConnection;
 use winldap::search::{LdapSearch, LdapEntry};
@@ -13,6 +20,68 @@ pub struct Domain {
     pub sid: Sid,
     pub distinguished_name: String,
     pub netbios_name: String,
+}
+
+pub(crate) fn read_password(out: &mut String, prompt: &str) {
+    let stdout = std::io::stdout();
+    let stdin = std::io::stdin();
+    let mut stdout = stdout.lock();
+    let mut stdin = stdin.lock();
+
+    print!("{} : ", prompt);
+    let _ = stdout.flush();
+    let h_console = windows::Win32::Foundation::HANDLE(stdin.as_raw_handle() as isize);
+    let mut prev_stdin_mode = CONSOLE_MODE::default();
+    let succeeded = unsafe { GetConsoleMode(h_console, &mut prev_stdin_mode as *mut _) };
+    if !succeeded.as_bool() {
+        eprintln!("Unable to setup console");
+        std::process::exit(1);
+    }
+    let succeeded = unsafe { SetConsoleMode(h_console, CONSOLE_MODE((prev_stdin_mode.0 | ENABLE_LINE_INPUT.0 | ENABLE_PROCESSED_INPUT.0) & !ENABLE_ECHO_INPUT.0)) };
+    if !succeeded.as_bool() {
+        eprintln!("Unable to setup console");
+        std::process::exit(1);
+    }
+    let _ = std::io::BufReader::new(stdin).read_line(out);
+    let succeeded = unsafe { SetConsoleMode(h_console, prev_stdin_mode) };
+    if !succeeded.as_bool() {
+        eprintln!("Unable to setup console");
+        std::process::exit(1);
+    }
+    println!();
+    if out.ends_with("\r\n") {
+        out.pop();
+        out.pop();
+    } else if out.ends_with("\n") {
+        out.pop();
+    }
+}
+
+pub(crate) fn get_gc_domain_controller() -> Option<(String, u16)> {
+    let mut dc_info_ptr: *mut DOMAIN_CONTROLLER_INFOW = null_mut();
+    let res = unsafe { DsGetDcNameW(None, None, null_mut(), None, DS_GC_SERVER_REQUIRED | DS_DIRECTORY_SERVICE_REQUIRED | DS_RETURN_DNS_NAME, &mut dc_info_ptr as *mut _) };
+    if res != ERROR_SUCCESS.0 || dc_info_ptr.is_null() {
+        return None;
+    }
+    let server = unsafe { pwstr_to_str((*dc_info_ptr).DomainControllerName.0) };
+    unsafe { NetApiBufferFree(dc_info_ptr as *mut _); }
+    let server = server.trim_start_matches('\\');
+    Some(if let Some((host, port)) = server.split_once(':') {
+        (host.to_owned(), port.parse().unwrap_or(389))
+    } else {
+        (server.to_owned(), 389)
+    })
+}
+
+pub(crate) fn pwstr_to_str(ptr: *const u16) -> String {
+    let mut len = 0;
+    unsafe {
+        while *(ptr.add(len)) != 0 {
+            len += 1;
+        }
+    }
+    let slice = unsafe { &*(std::ptr::slice_from_raw_parts(ptr, len)) };
+    String::from_utf16_lossy(slice)
 }
 
 pub(crate) fn get_attr_sid<T: Borrow<LdapEntry>>(search_results: &[T], base: &str, attr_name: &str) -> Result<Sid, LdapError> {

@@ -19,7 +19,6 @@ pub struct LdapCredentials<'a> {
 #[derive(Debug)]
 pub struct LdapConnection {
     pub(crate) handle: *mut ldap,
-    pub(crate) hostname: String,
     pub(crate) supported_controls: HashSet<String>,
     pub(crate) naming_contexts: Vec<String>,
     pub(crate) root_domain_naming_context: String,
@@ -30,8 +29,8 @@ pub struct LdapConnection {
 unsafe impl Send for LdapConnection { }
 
 impl LdapConnection {
-    pub fn new(server: Option<&str>, port: u16, credentials: Option<&LdapCredentials>) -> Result<Self, LdapError> {
-        let handle = unsafe { ldap_initW(server.unwrap_or(""), port as u32) };
+    pub fn new(server: &str, port: u16, credentials: Option<(&str, &str, &str)>) -> Result<Self, LdapError> {
+        let handle = unsafe { ldap_initW(server, port as u32) };
         if handle.is_null() {
             return Err(LdapError::ConnectionFailed(get_ldap_errcode()));
         }
@@ -42,16 +41,6 @@ impl LdapConnection {
         if unsafe { ldap_set_option(handle, LDAP_OPT_REFERRALS as i32, 0 as _) } != (LDAP_SUCCESS.0 as u32) {
             return Err(LdapError::ConnectionFailed(get_ldap_errcode()));
         }
-
-        // When no server is explicitly requested, specify that we want a global catalog 
-        if server.is_none() {
-            // Flags are documented here: https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-nrpc/fb8e1146-a045-4c31-98d1-c68507ad5620
-            let dsname_flags: u32 = 1 << 25;
-            if unsafe { ldap_set_option(handle, LDAP_OPT_GETDSNAME_FLAGS as i32, &dsname_flags as *const _ as *const _) } != (LDAP_SUCCESS.0 as u32) {
-                return Err(LdapError::ConnectionFailed(get_ldap_errcode()));
-            }
-        }
-
         // The actual connection timeout is much higher than that, since underlying
         // layers must fail before this timeout even starts: DNS, maybe mDNS, maybe
         // NBNS, etc. On a default Windows 10 install, that easily takes 1500 ms.
@@ -69,10 +58,10 @@ impl LdapConnection {
         let mut domain_wstr;
         let mut username_wstr;
         let mut password_wstr;
-        let creds = if let Some(creds) = credentials {
-            domain_wstr = str_to_wstr(creds.domain);
-            username_wstr = str_to_wstr(creds.username);
-            password_wstr = str_to_wstr(creds.password);
+        let creds = if let Some((domain, username, password)) = credentials {
+            domain_wstr = str_to_wstr(&domain);
+            username_wstr = str_to_wstr(&username);
+            password_wstr = str_to_wstr(&password);
             Some(SEC_WINNT_AUTH_IDENTITY_W {
                 User: username_wstr.as_mut_ptr(),
                 UserLength: (username_wstr.len() - 1) as u32,
@@ -96,27 +85,8 @@ impl LdapConnection {
             return Err(LdapError::BindFailed(get_ldap_errcode()));
         }
 
-        let hostname = if let Some(server) = server {
-            server.to_owned()
-        } else {
-            unsafe {
-                let mut hostname_ptr: *mut u16 = null_mut();
-                let res = ldap_get_optionW(handle, LDAP_OPT_HOST_NAME as i32, &mut hostname_ptr as *mut _ as *mut _);
-                if res != LDAP_SUCCESS.0 as u32 {
-                    return Err(LdapError::GetDNSHostnameFailed { code: get_ldap_errcode() });
-                }
-                let mut len = 0;
-                while *(hostname_ptr.add(len)) != 0 {
-                    len += 1;
-                }
-                let slice = std::slice::from_raw_parts(hostname_ptr, len);
-                String::from_utf16_lossy(slice)
-            }
-        };
-
         let mut conn = Self {
             handle,
-            hostname,
             supported_controls: HashSet::new(),
             naming_contexts: Vec::new(),
             root_domain_naming_context: String::new(),
@@ -133,10 +103,6 @@ impl LdapConnection {
         conn.supported_controls = HashSet::from_iter(get_attr_strs(&rootdse, "(rootDSE)", "supportedcontrol")?.into_iter());
 
         Ok(conn)
-    }
-
-    pub fn get_hostname(&self) -> &str {
-        &self.hostname
     }
 
     pub fn get_errcode(&self) -> u32 {
