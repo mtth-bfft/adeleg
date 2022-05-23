@@ -233,6 +233,16 @@ fn main() {
                     continue;
                 },
             };
+            if let Some(owner) = &res.owner {
+                let (dn, ptype) = engine.resolve_sid(&owner).unwrap_or((owner.to_string(), PrincipalType::External));
+                writer.write_record(&[
+                    location.to_string().as_str(),
+                    &dn,
+                    &ptype.to_string(),
+                    "Owner",
+                    "This principal owns the object, which implicitly grants them full control over it",
+                ]).expect("unable to write CSV record");
+            }
             if res.dacl_protected {
                 writer.write_record(&[
                     location.to_string().as_str(),
@@ -318,12 +328,30 @@ fn main() {
                 if res.deleted_trustee.is_empty() {
                     warning_count += 1;
                 }
+                if let Some(owner) = &res.owner {
+                    let entry = reindexed.entry(owner.clone())
+                        .or_default()
+                        .entry(location.clone())
+                        .or_insert_with(|| {
+                            AdelegResult {
+                                owner: None,
+                                dacl_protected: false,
+                                non_canonical_ace: None,
+                                deleted_trustee: vec![],
+                                orphan_aces: vec![],
+                                delegations_found: vec![],
+                                delegations_missing: vec![],
+                            }
+                        });
+                    entry.owner = Some(owner.clone());
+                }
                 for ace in res.orphan_aces {
                     let entry = reindexed.entry(ace.trustee.clone())
                         .or_default()
                         .entry(location.clone())
                         .or_insert_with(|| {
                             AdelegResult {
+                                owner: None,
                                 dacl_protected: false,
                                 non_canonical_ace: None,
                                 deleted_trustee: vec![],
@@ -340,6 +368,7 @@ fn main() {
                         .entry(location.clone())
                         .or_insert_with(|| {
                             AdelegResult {
+                                owner: None,
                                 dacl_protected: false,
                                 non_canonical_ace: None,
                                 deleted_trustee: vec![],
@@ -359,6 +388,7 @@ fn main() {
                         .entry(location.clone())
                         .or_insert_with(|| {
                             AdelegResult {
+                                owner: None,
                                 dacl_protected: false,
                                 non_canonical_ace: None,
                                 deleted_trustee: vec![],
@@ -377,6 +407,9 @@ fn main() {
             println!("\n=== {}", engine.resolve_sid(trustee).map(|(dn, _)| dn).unwrap_or(trustee.to_string()));
             for (location, res) in locations.iter() {
                 println!("       {} :", location);
+                if res.owner.as_ref() == Some(trustee) {
+                    println!("            Owner");
+                }
                 for ace in &res.orphan_aces {
                     println!("            {} ACE {}",
                         if ace.grants_access() { "Allow" } else { "Deny" },
@@ -386,8 +419,8 @@ fn main() {
                             ace.get_inherited_object_type(),
                             ace.get_container_inherit(),
                             ace.get_inherit_only()
-                        ));
-                    }
+                    ));
+                }
                 for (delegation, _) in &res.delegations_missing {
                     println!("            Delegation missing: {}",
                         engine.describe_delegation_rights(&delegation.rights));
@@ -428,6 +461,9 @@ fn main() {
                     continue;
                 },
             };
+            if let Some(owner) = &res.owner {
+                println!("       Owner: {}", engine.resolve_sid(owner).map(|(dn, _)| dn).unwrap_or(owner.to_string()));
+            }
             if res.dacl_protected {
                 println!("       /!\\ ACL is configured to block inheritance of parent container ACEs");
             }

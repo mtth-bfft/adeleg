@@ -642,6 +642,26 @@ impl BasicApp {
                         return;
                     },
                 };
+                if let Some(owner) = &result.owner {
+                    self.list.insert_item(nwg::InsertListViewItem {
+                        index: Some(0),
+                        column_index: 0,
+                        text: Some("Warning".to_owned()),
+                        image: None,
+                    });
+                    self.list.insert_item(nwg::InsertListViewItem {
+                        index: Some(0),
+                        column_index: 1,
+                        text: Some(engine.resolve_sid(owner).map(|(dn, _)| dn).unwrap_or(owner.to_string())),
+                        image: None,
+                    });
+                    self.list.insert_item(nwg::InsertListViewItem {
+                        index: Some(0),
+                        column_index: 2,
+                        text: Some("This principal owns the object, which implicitly grants them full control over it".to_owned()),
+                        image: None,
+                    });
+                }
                 if result.dacl_protected {
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),

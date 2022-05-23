@@ -109,6 +109,7 @@ pub(crate) struct Engine<'a> {
 #[derive(Debug, Clone)]
 pub struct AdelegResult {
     pub(crate) dacl_protected: bool,
+    pub(crate) owner: Option<Sid>,
     pub(crate) non_canonical_ace: Option<Ace>,
     pub(crate) deleted_trustee: Vec<Ace>,
     pub(crate) orphan_aces: Vec<Ace>,
@@ -118,25 +119,14 @@ pub struct AdelegResult {
 
 impl AdelegResult {
     pub(crate) fn needs_to_be_displayed(&self, view_builtin_delegations: bool) -> bool {
-        if self.dacl_protected {
-            return true;
-        }
-        if self.non_canonical_ace.is_some() {
-            return true;
-        }
-        if !self.deleted_trustee.is_empty() {
-            return true;
-        }
-        if !self.orphan_aces.is_empty() {
-            return true;
-        }
-        if self.delegations_found.iter().any(|(d, _, _)| !d.builtin) || (!self.delegations_found.is_empty() && view_builtin_delegations) {
-            return true;
-        }
-        if !self.delegations_missing.is_empty() {
-            return true;
-        }
-        false
+        self.dacl_protected ||
+            self.owner.is_some() ||
+            self.non_canonical_ace.is_some() ||
+            !self.deleted_trustee.is_empty() ||
+            !self.orphan_aces.is_empty() ||
+            self.delegations_found.iter().any(|(d, _, _)| !d.builtin) ||
+            (!self.delegations_found.is_empty() && view_builtin_delegations) ||
+            !self.delegations_missing.is_empty()
     }
 }
 
@@ -292,6 +282,7 @@ impl<'a> Engine<'a> {
                 };
                 let mut entry = AdelegResult {
                     dacl_protected,
+                    owner: None,
                     deleted_trustee: vec![],
                     orphan_aces: vec![],
                     non_canonical_ace: dacl.check_canonicality().err(),
@@ -374,6 +365,7 @@ impl<'a> Engine<'a> {
             }
             let admincount = get_attr_str(&[&entry], &entry.dn, "admincount")
                 .unwrap_or("0".to_owned()) != "0";
+            let owner = sd.owner.expect("assertion failed: object without an owner!?");
             let dacl = sd.dacl.expect("assertion failed: object without a DACL!?");
 
             let (default_aces, default_dacl_protected) = match schema_aces.get(&DelegationLocation::DefaultSecurityDescriptor(most_specific_class.clone())) {
@@ -386,8 +378,19 @@ impl<'a> Engine<'a> {
                 !IGNORED_BLOCK_DACL_CLASSES.contains(&most_specific_class.to_ascii_lowercase().as_str()) &&
                 !IGNORED_BLOCK_DACL_DOMAIN_CONTAINERS.iter().any(|rdn| entry.dn.eq_ignore_ascii_case(&format!("{},{}", rdn, naming_context)));
 
+            // Derive ACEs from the defaultSecurityDescriptor of the object's class, and see if the ACE is a default.
+            // These ACEs are not simply memcpy()ed, they are treated as if the object had inherited them from the schema.
+            let object_type = self.schema.class_guids.get(&most_specific_class).expect("assertion failed: invalid objectClass?!");
+            let default_aces = get_ace_derived_by_inheritance_from_schema(default_aces, &owner, object_type, true);
+
+            let owner = if self.ignored_trustee_sids.contains(&owner) {
+                None
+            } else {
+                Some(owner)
+            };
             let mut record = AdelegResult {
                 dacl_protected,
+                owner,
                 non_canonical_ace: dacl.check_canonicality().err(),
                 deleted_trustee: vec![],
                 orphan_aces: vec![],
@@ -395,11 +398,6 @@ impl<'a> Engine<'a> {
                 delegations_missing: vec![],
             };
 
-            // Derive ACEs from the defaultSecurityDescriptor of the object's class, and see if the ACE is a default.
-            // These ACEs are not simply memcpy()ed, they are treated as if the object had inherited them from the schema.
-            let owner = sd.owner.as_ref().expect("assertion failed: object without an owner!?");
-            let object_type = self.schema.class_guids.get(&most_specific_class).expect("assertion failed: invalid objectClass?!");
-            let default_aces = get_ace_derived_by_inheritance_from_schema(default_aces, &owner, object_type, true);
             for ace in dacl.aces {
                 // Do not look for the exact list of default ACEs from the schema in the exact same order:
                 // if some ACEs have been removed, we still want to treat the others as implicit ones from the schema.
