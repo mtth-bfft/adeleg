@@ -8,10 +8,18 @@ use nwd::NwgUi;
 use winldap::connection::LdapConnection;
 use authz::Sid;
 use crate::delegations::DelegationLocation;
-use crate::engine::Engine;
+use crate::engine::{Engine, PrincipalType};
 use crate::error::AdelegError;
 use crate::AdelegResult;
 use crate::utils::{ends_with_case_insensitive, replace_suffix_case_insensitive};
+
+const ICON_COMPUTER: &[u8] = include_bytes!("..\\icons\\computer.ico");
+const ICON_USER: &[u8] = include_bytes!("..\\icons\\user.ico");
+const ICON_GROUP: &[u8] = include_bytes!("..\\icons\\group.ico");
+const ICON_OU: &[u8] = include_bytes!("..\\icons\\ou.ico");
+const ICON_CONTAINER: &[u8] = include_bytes!("..\\icons\\container.ico");
+const ICON_DOMAIN: &[u8] = include_bytes!("..\\icons\\domain.ico");
+const ICON_EXTERNAL: &[u8] = include_bytes!("..\\icons\\external.ico");
 
 #[derive(Default, NwgUi)]
 pub struct BasicApp {
@@ -22,6 +30,9 @@ pub struct BasicApp {
     view_builtin_delegations: RefCell<bool>,
     show_unreadable_warnings: RefCell<bool>,
     results: Option<RefCell<HashMap<DelegationLocation, Result<AdelegResult, AdelegError>>>>,
+
+    #[nwg_resource(initial: 10, size: (16, 16))]
+    icon_list: nwg::ImageList,
 
     #[nwg_control(maximized: true, title: "ADeleg", flags: "MAIN_WINDOW|VISIBLE")]
     #[nwg_events(
@@ -100,6 +111,12 @@ pub struct BasicApp {
 
 impl BasicApp {
     fn init(&self) {
+        for bin in &[ICON_COMPUTER, ICON_USER, ICON_GROUP, ICON_OU, ICON_CONTAINER, ICON_DOMAIN, ICON_EXTERNAL] {
+            let mut icon = nwg::Icon::default();
+            nwg::Icon::builder().source_bin(Some(bin)).size(Some((16, 16))).build(&mut icon).expect("unable to parse embedded icon");
+            self.icon_list.add_icon(&icon);
+        }
+        self.tree_view.set_image_list(Some(&self.icon_list));
         self.list.set_headers_enabled(true);
         let (width, _) = self.list.size();
         self.list.insert_column(nwg::InsertListViewColumn {
@@ -255,15 +272,15 @@ impl BasicApp {
     }
 
     fn tree_path_to_trustee(&self, tree_path: &[String]) -> Sid {
+        let engine = self.engine.as_ref().unwrap().borrow();
         if tree_path.last().map(|s| s.as_str()) == Some("Global") {
             if let Some(sid) = tree_path.get(0) {
-                if let Ok(sid) = Sid::try_from(sid.as_str()) {
+                if let Some(sid) = engine.resolve_str_to_sid(sid) {
                     return sid;
                 }
             }
         } else {
             let dn = tree_path.join(",");
-            let engine = self.engine.as_ref().unwrap().borrow();
             if let Some(sid) = engine.resolve_str_to_sid(&dn) {
                 return sid;
             }
@@ -364,6 +381,7 @@ impl BasicApp {
         self.window.focus();
         self.tree_view.clear();
         let results = self.results.as_ref().unwrap().borrow();
+        let engine = self.engine.as_ref().unwrap().borrow();
 
         if view_by_trustee {
             self.list.update_column(1, nwg::InsertListViewColumn {
@@ -410,12 +428,33 @@ impl BasicApp {
                             },
                             None => {
                                 let node = self.tree_view.insert_item(part, parent.as_ref(), nwg::TreeInsert::Last);
+                                let part = part.to_ascii_lowercase();
+                                let icon_number = if part.starts_with("dc=") {
+                                    5
+                                } else if part.starts_with("ou=") {
+                                    3
+                                } else {
+                                    4
+                                };
+                                self.tree_view.set_item_image(&node, icon_number, false);
+                                self.tree_view.set_item_image(&node, icon_number, true);
                                 cursor = self.tree_view.first_child(&node);
                                 parent = Some(node);
                                 break;
                             }
                         }
                     }
+                }
+                if let Some(node) = parent {
+                    let ptype = engine.resolve_sid(trustee).map(|(_, ptype)| ptype).unwrap_or(PrincipalType::External);
+                    let icon_number = match ptype {
+                        PrincipalType::Computer => 0,
+                        PrincipalType::User => 1,
+                        PrincipalType::Group => 2,
+                        PrincipalType::External => 6,
+                    };
+                    self.tree_view.set_item_image(&node, icon_number, false);
+                    self.tree_view.set_item_image(&node, icon_number, true);
                 }
             }
         } else {
@@ -452,6 +491,16 @@ impl BasicApp {
                             },
                             None => {
                                 let node = self.tree_view.insert_item(part, parent.as_ref(), nwg::TreeInsert::Last);
+                                let part = part.to_ascii_lowercase();
+                                let icon_number = if part.starts_with("dc=") {
+                                    5
+                                } else if part.starts_with("ou=") {
+                                    3
+                                } else {
+                                    4
+                                };
+                                self.tree_view.set_item_image(&node, icon_number, false);
+                                self.tree_view.set_item_image(&node, icon_number, true);
                                 cursor = self.tree_view.first_child(&node);
                                 parent = Some(node);
                                 break;

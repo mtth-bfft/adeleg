@@ -843,6 +843,11 @@ impl<'a> Engine<'a> {
     }
 
     pub fn resolve_str_to_sid(&self, trustee: &str) -> Option<Sid> {
+        for (sid, name) in self.resolved_sid_to_dn.borrow().iter() {
+            if name == trustee {
+                return Some(sid.clone());
+            }
+        }
         if let Some((netbios_name,username)) = trustee.split_once("\\") {
             for domain in &self.domains {
                 if domain.netbios_name.to_lowercase() == netbios_name.to_lowercase() {

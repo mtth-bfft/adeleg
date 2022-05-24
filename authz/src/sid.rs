@@ -1,6 +1,7 @@
 use core::fmt::Debug;
 use std::convert::TryFrom;
 use windows::Win32::Security::EqualPrefixSid;
+use windows::Win32::Security::GetSidIdentifierAuthority;
 use windows::Win32::Security::GetSidSubAuthority;
 use windows::Win32::Security::GetSidSubAuthorityCount;
 use core::ptr::null_mut;
@@ -64,6 +65,23 @@ impl Sid {
         unsafe {
             EqualPrefixSid(PSID(self.as_bytes().as_ptr() as isize), PSID(other.as_bytes().as_ptr() as isize))
         }.as_bool()
+    }
+
+    // Returns true if and only if the SID starts with S-1-5-21-X-Y-Z
+    pub fn is_domain_specific(&self) -> bool {
+        unsafe {
+            let sub_auth_count =  *(GetSidSubAuthorityCount(PSID(self.bytes.as_ptr() as isize)));
+            if sub_auth_count < 4 {
+                return false;
+            }
+            if (*GetSidIdentifierAuthority(PSID(self.bytes.as_ptr() as isize))).Value != [0, 0, 0, 0, 0, 5] { // SECURITY_NT_AUTHORITY
+                return false;
+            }
+            if *(GetSidSubAuthority(PSID(self.bytes.as_ptr() as isize), 0)) != 21 {
+                return false;
+            }
+        }
+        true
     }
 
     pub fn with_rid(&self, rid: u32) -> Self {
