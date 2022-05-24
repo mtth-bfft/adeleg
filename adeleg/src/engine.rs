@@ -543,13 +543,13 @@ impl<'a> Engine<'a> {
 
     pub fn describe_delegation_rights(&self, delegation_rights: &DelegationRights) -> String {
         match delegation_rights {
-            DelegationRights::Ace(ace) => self.describe_ace(
+            DelegationRights::Ace(ace) => format!("{} {}", if ace.allow { "Allow" } else { "Deny" }, self.describe_ace(
                 ace.access_mask,
                 ace.object_type.as_ref(),
                 ace.inherited_object_type.as_ref(),
                 ace.container_inherit,
                 ace.inherit_only
-            ),
+            )),
             DelegationRights::TemplateName { template } => template.clone(),
             DelegationRights::Template(template) => template.name.clone(),
         }
