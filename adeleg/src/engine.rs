@@ -360,8 +360,13 @@ impl<'a> Engine<'a> {
                 }
             };
             if let Ok(object_sid) = get_attr_sid(&[&entry], &entry.dn, "objectsid") {
-                self.resolved_sid_to_dn.borrow_mut().insert(object_sid.clone(), entry.dn.clone());
-                self.resolved_sid_to_type.borrow_mut().insert(object_sid.clone(), PrincipalType::from(most_specific_class.as_str()));
+                // Some well-known SIDs will be found this way, in CN=ForeignSecurityPrincipals in each domain.
+                // We prefer these SIDs to be shown as a resolved entry (in a "Global" section), so we first try to look them
+                // up (using LookupAccountSidLocal()) and only use their DN if that fails.
+                if object_sid.is_domain_specific() || self.resolve_sid(&object_sid).is_none() {
+                    self.resolved_sid_to_dn.borrow_mut().insert(object_sid.clone(), entry.dn.clone());
+                    self.resolved_sid_to_type.borrow_mut().insert(object_sid.clone(), PrincipalType::from(most_specific_class.as_str()));
+                }
             }
             let admincount = get_attr_str(&[&entry], &entry.dn, "admincount")
                 .unwrap_or("0".to_owned()) != "0";
