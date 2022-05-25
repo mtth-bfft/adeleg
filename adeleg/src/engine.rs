@@ -421,11 +421,19 @@ impl<'a> Engine<'a> {
 
         // Remove any ACE whose trustee is a parent object (parents control their child containers anyway,
         // e.g. computers control their BitLocker recovery information, TPM information, Hyper-V virtual machine objects, etc.)
+        // Also do not flag objects owned by a parent object (same cases).
         for (location, res) in res.iter_mut() {
             if let DelegationLocation::Dn(dn) = location {
                 if let Ok(res) = res {
+                    if let Some(sid) = &res.owner {
+                        if let Some(trustee_dn) = self.resolved_sid_to_dn.borrow().get(&sid) { // if any parent object has a SID, it is necessarily in cache
+                            if ends_with_case_insensitive(dn, trustee_dn) {
+                                res.owner = None;
+                            }
+                        }
+                    }
                     res.orphan_aces.retain(|ace| {
-                        if let Some(trustee_dn) = self.resolved_sid_to_dn.borrow().get(&ace.trustee) {
+                        if let Some(trustee_dn) = self.resolved_sid_to_dn.borrow().get(&ace.trustee) { // if any parent object has a SID, it is necessarily in cache
                             if ends_with_case_insensitive(dn, trustee_dn) {
                                 return false;
                             }
