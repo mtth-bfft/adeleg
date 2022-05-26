@@ -1,6 +1,6 @@
 [package]
 name = "adeleg"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 authors = ["Aurélien Bordes <aurelien.bordes@ssi.gouv.fr>", "Matthieu Buffet <matthieu.buffet@ssi.gouv.fr>"]
 description = "An Active Directory delegation management tool"
