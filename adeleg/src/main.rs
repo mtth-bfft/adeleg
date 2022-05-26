@@ -486,7 +486,16 @@ fn main() {
                 println!("       /!\\ ACL is configured to block inheritance of parent container ACEs");
             }
             if let Some(ace) = &res.non_canonical_ace {
-                println!("       /!\\ ACL is not in canonical order, e.g. see ACE: {}", ace);
+                println!("       /!\\ ACL is not in canonical order, e.g. see {} ACE for {} : {}",
+                    if ace.grants_access() { "allow" } else { "deny" },
+                    engine.resolve_sid(&ace.trustee).map(|(dn, _)| dn).unwrap_or(ace.trustee.to_string()),
+                    engine.describe_ace(
+                        ace.access_mask,
+                        ace.get_object_type(),
+                        ace.get_inherited_object_type(),
+                        ace.get_container_inherit(),
+                        ace.get_inherit_only()
+                ));
             }
             if !res.deleted_trustee.is_empty() {
                 println!("       /!\\ ACEs for trustees which do not exist anymore and should be cleaned up:");

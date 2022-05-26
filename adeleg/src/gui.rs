@@ -773,7 +773,16 @@ impl BasicApp {
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 2,
-                        text: Some(format!("DACL is not in canonical order, e.g. see ACE: {}", ace)),
+                        text: Some(format!("DACL is not in canonical order, e.g. see {} ACE for {}: {}",
+                            if ace.grants_access() { "allow" } else { "deny" },
+                            engine.resolve_sid(&ace.trustee).map(|(dn, _)| dn).unwrap_or(ace.trustee.to_string()),
+                            engine.describe_ace(
+                                ace.access_mask,
+                                ace.get_object_type(),
+                                ace.get_inherited_object_type(),
+                                ace.get_container_inherit(),
+                                ace.get_inherit_only()
+                        ))),
                         image: None,
                     });
                 }
