@@ -88,7 +88,12 @@ fn main() {
                 .long("index")
                 .takes_value(true)
                 .default_value("resources")
-                .possible_values(&["resources", "trustees"])                
+                .possible_values(&["resources", "trustees"])
+        ).arg(
+            Arg::new("text")
+            .help("Output as text (default is GUI if there is no commandline argument")
+            .long("text")
+            .takes_value(false)
         ).arg(
             Arg::new("csv")
                 .help("Write output into a CSV file")
