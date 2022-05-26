@@ -293,7 +293,7 @@ impl<'a> Engine<'a> {
                     delegations: vec![],
                 };
                 for ace in dacl.aces {
-                    if !self.is_ace_interesting(&ace, false, &[]) {
+                    if !self.is_ace_interesting(&ace, false, &[], &[]) {
                         continue;
                     }
                     entry.orphan_aces.push(ace);
@@ -407,12 +407,7 @@ impl<'a> Engine<'a> {
             };
 
             for ace in dacl.aces {
-                // Do not look for the exact list of default ACEs from the schema in the exact same order:
-                // if some ACEs have been removed, we still want to treat the others as implicit ones from the schema.
-                if default_aces.contains(&ace) {
-                    continue;
-                }
-                if !self.is_ace_interesting(&ace, admincount, &adminsdholder_aces[..]) {
+                if !self.is_ace_interesting(&ace, admincount, &adminsdholder_aces[..], &default_aces) {
                     continue;
                 }
                 record.orphan_aces.push(ace);
@@ -449,9 +444,7 @@ impl<'a> Engine<'a> {
         Ok(res)
     }
 
-    pub fn is_ace_interesting(&self, ace: &Ace, admincount: bool, adminsdholder_aces: &[Ace]) -> bool {
-        let everyone = Sid::try_from("S-1-1-0").expect("invalid SID");
-
+    pub fn is_ace_interesting(&self, ace: &Ace, admincount: bool, adminsdholder_aces: &[Ace], default_aces: &[Ace]) -> bool {
         if ace.is_inherited() {
             return false; // ignore inherited ACEs
         }
@@ -459,6 +452,14 @@ impl<'a> Engine<'a> {
         if problematic_rights == 0 {
             return false; // ignore read-only ACEs which cannot be abused
         }
+
+        // Do not look for the exact list of default ACEs from the schema in the exact same order:
+        // if some ACEs have been removed, we still want to treat the others as implicit ones from the schema.
+        if default_aces.iter().any(|default_ace| ace_equivalent(default_ace, ace)) {
+            return false;
+        }
+
+        let everyone = Sid::try_from("S-1-1-0").expect("invalid SID");
         if ace.trustee == everyone && !ace.grants_access() &&
                 (ace.access_mask & !(ADS_RIGHT_DELETE.0 as u32 | ADS_RIGHT_DS_DELETE_CHILD.0 as u32 | ADS_RIGHT_DS_DELETE_TREE.0 as u32)) == 0 {
             return false; // ignore "delete protection" ACEs
@@ -554,11 +555,18 @@ impl<'a> Engine<'a> {
         for (_, res) in res.iter_mut() {
             if let Ok(res) = res {
                 let mut explained_aces = vec![false; res.orphan_aces.len()];
-                for (_, _, aces) in &res.delegations {
+                for (expected_delegation, _, aces) in &res.delegations {
                     for expected_ace in aces {
-                        if let Some((pos, _)) = res.orphan_aces.iter().enumerate().find(|(_ , orphan_ace)| ace_equivalent(orphan_ace, expected_ace)) {
-                            explained_aces[pos] = true;
-                        } else {
+                        let mut found = false;
+                        for (idx, orphan_ace) in res.orphan_aces.iter().enumerate() {
+                            if ace_equivalent(orphan_ace, expected_ace) {
+                                explained_aces[idx] = true;
+                                found = true;
+                                // Sometimes (e.g. the default ACE for DnsAdmins on the MicrosoftDNS system container in Windows Server 2003), ACEs are duplicated.
+                                // Finding the first matching ACE is not enough, do not break here.
+                            }
+                        }
+                        if !found && !expected_delegation.builtin {
                             res.missing_aces.push(expected_ace.clone());
                         }
                     }
