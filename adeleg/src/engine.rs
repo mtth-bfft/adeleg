@@ -501,6 +501,7 @@ impl<'a> Engine<'a> {
         let schema_aces = self.get_schema_aces()?;
         let mut res = schema_aces.get(&self.root_domain.sid).cloned().unwrap_or_default();
         let mut naming_contexts = Vec::from(self.ldap.get_naming_contexts());
+        let config_naming_context = self.ldap.get_configuration_naming_context();
         naming_contexts.sort();
 
         for naming_context in naming_contexts {
@@ -509,13 +510,12 @@ impl<'a> Engine<'a> {
                 .unwrap_or(&self.root_domain.sid);
             let schema_aces = schema_aces.get(domain_sid).expect("naming context without an associated domain");
 
-            let explicit_aces = self.get_explicit_aces(&naming_context, schema_aces)?;
-            res.extend(explicit_aces);
+            let mut explicit_aces = self.get_explicit_aces(&naming_context, schema_aces)?;
 
             // Move ACEs from "orphan" to "deleted trustee" if the trustee is from this forest and does
             // not exist anymore
             let domain_sid = domain_sid.with_rid(0);
-            for (_, result) in res.iter_mut() {
+            for (_, result) in explicit_aces.iter_mut() {
                 if let Ok(result) = result {
                     result.orphan_aces.retain(|ace| {
                         if ace.trustee.shares_prefix_with(&domain_sid) && self.resolve_sid(&ace.trustee).is_none() {
@@ -527,6 +527,24 @@ impl<'a> Engine<'a> {
                     });
                 }
             }
+
+            // Special handling of root keys for the Key Distribution Service, which must have a protected ACL
+            // They are only delegated to tier-0 accounts
+            // (c.f. https://docs.microsoft.com/en-us/windows-server/security/group-managed-service-accounts/create-the-key-distribution-services-kds-root-key)
+            if &naming_context == config_naming_context {
+                let kds_container = format!(",CN=Master Root Keys,CN=Group Key Distribution Service,CN=Services,{}", config_naming_context);
+                for (location, res) in explicit_aces.iter_mut() {
+                    if let Ok(res) = res {
+                        if let DelegationLocation::Dn(dn) = location {
+                            if ends_with_case_insensitive(dn, &kds_container) {
+                                res.dacl_protected = false;
+                            }
+                        }
+                    }
+                }
+            }
+
+            res.extend(explicit_aces);
         }
 
         // Fill which delegations are expected and where
