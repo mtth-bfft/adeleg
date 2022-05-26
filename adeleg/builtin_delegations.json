@@ -72,6 +72,12 @@
         "builtin": true
     },
     {
+        "trustee": { "sam_account_name": "DnsAdmins" },
+        "resource": { "dn": "CN=MicrosoftDNS,CN=System,DC=*" },
+        "access_mask": 983551,
+        "builtin": true
+    },
+    {
         "trustee": { "sid": "S-1-5-32-561" },
         "resource": { "dn": "CN=AdminSDHolder,CN=System,DC=*" },
         "access_mask": 48,
