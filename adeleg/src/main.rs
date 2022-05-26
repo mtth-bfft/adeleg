@@ -286,17 +286,23 @@ fn main() {
                     ).as_str(),
                 ]).expect("unable to write CSV record");
             }
-            for (deleg, trustee) in &res.delegations_missing {
-                let (dn, ptype) = engine.resolve_sid(trustee).unwrap_or((trustee.to_string(), PrincipalType::External));
+            for ace in &res.missing_aces {
+                let (dn, ptype) = engine.resolve_sid(&ace.trustee).unwrap_or((ace.trustee.to_string(), PrincipalType::External));
                 writer.write_record(&[
                     location.to_string().as_str(),
                     &dn,
                     &ptype.to_string(),
-                    "Delegation (missing!)",
-                    engine.describe_delegation_rights(&deleg.rights).as_str(),
+                    if ace.grants_access() { "Missing allow ACE" } else { "Missing deny ACE" },
+                    engine.describe_ace(
+                        ace.access_mask,
+                        ace.get_object_type(),
+                        ace.get_inherited_object_type(),
+                        ace.get_container_inherit(),
+                        ace.get_inherit_only()
+                    ).as_str(),
                 ]).expect("unable to write CSV record");
             }
-            for (deleg, trustee, _) in &res.delegations_found {
+            for (deleg, trustee, _) in &res.delegations {
                 if deleg.builtin && !show_builtin {
                     continue;
                 }
@@ -339,8 +345,8 @@ fn main() {
                                 non_canonical_ace: None,
                                 deleted_trustee: vec![],
                                 orphan_aces: vec![],
-                                delegations_found: vec![],
-                                delegations_missing: vec![],
+                                missing_aces: vec![],
+                                delegations: vec![],
                             }
                         });
                     entry.owner = Some(owner.clone());
@@ -356,14 +362,14 @@ fn main() {
                                 non_canonical_ace: None,
                                 deleted_trustee: vec![],
                                 orphan_aces: vec![],
-                                delegations_found: vec![],
-                                delegations_missing: vec![],
+                                missing_aces: vec![],
+                                delegations: vec![],
                             }
                         });
                     entry.orphan_aces.push(ace);
                 }
-                for (deleg, trustee) in res.delegations_missing {
-                    let entry = reindexed.entry(trustee.clone())
+                for ace in res.missing_aces {
+                    let entry = reindexed.entry(ace.trustee.clone())
                         .or_default()
                         .entry(location.clone())
                         .or_insert_with(|| {
@@ -373,13 +379,13 @@ fn main() {
                                 non_canonical_ace: None,
                                 deleted_trustee: vec![],
                                 orphan_aces: vec![],
-                                delegations_found: vec![],
-                                delegations_missing: vec![],
+                                missing_aces: vec![],
+                                delegations: vec![],
                             }
                         });
-                    entry.delegations_missing.push((deleg, trustee));
+                    entry.missing_aces.push(ace);
                 }
-                for (deleg, trustee, aces) in res.delegations_found {
+                for (deleg, trustee, aces) in res.delegations {
                     if deleg.builtin && !show_builtin {
                         continue;
                     }
@@ -393,11 +399,11 @@ fn main() {
                                 non_canonical_ace: None,
                                 deleted_trustee: vec![],
                                 orphan_aces: vec![],
-                                delegations_found: vec![],
-                                delegations_missing: vec![],
+                                missing_aces: vec![],
+                                delegations: vec![],
                             }
                         });
-                    entry.delegations_found.push((deleg, trustee, aces));
+                    entry.delegations.push((deleg, trustee, aces));
                 }
             } else {
                 warning_count += 1;
@@ -421,11 +427,18 @@ fn main() {
                             ace.get_inherit_only()
                     ));
                 }
-                for (delegation, _) in &res.delegations_missing {
-                    println!("            Delegation missing: {}",
-                        engine.describe_delegation_rights(&delegation.rights));
+                for ace in &res.missing_aces {
+                    println!("            Missing {} ACE {}",
+                        if ace.grants_access() { "allow" } else { "deny" },
+                        engine.describe_ace(
+                            ace.access_mask,
+                            ace.get_object_type(),
+                            ace.get_inherited_object_type(),
+                            ace.get_container_inherit(),
+                            ace.get_inherit_only()
+                    ));
                 }
-                for (delegation, _, _) in &res.delegations_found {
+                for (delegation, _, _) in &res.delegations {
                     if !show_builtin && delegation.builtin {
                         continue;
                     }
@@ -477,7 +490,7 @@ fn main() {
                 }
             }
             if !res.orphan_aces.is_empty() {
-                println!("       ACEs:");
+                println!("       ACEs found:");
                 for ace in &res.orphan_aces {
                     println!("         {} {} : {}",
                         if ace.grants_access() { "Allow" } else { "Deny" },
@@ -491,17 +504,25 @@ fn main() {
                         ));
                 }
             }
-            if !res.delegations_missing.is_empty() {
-                println!("       Delegations missing:");
-                for (delegation, trustee) in &res.delegations_missing {
-                    println!("         {} : {}", engine.resolve_sid(&trustee).map(|(dn, _)| dn).unwrap_or(trustee.to_string()),
-                        engine.describe_delegation_rights(&delegation.rights));
+            if !res.missing_aces.is_empty() {
+                println!("       ACEs missing:");
+                for ace in &res.missing_aces {
+                    println!("         {} {} : {}",
+                        if ace.grants_access() { "Allow" } else { "Deny" },
+                        engine.resolve_sid(&ace.trustee).map(|(dn, _)| dn).unwrap_or(ace.trustee.to_string()),
+                        engine.describe_ace(
+                            ace.access_mask,
+                            ace.get_object_type(),
+                            ace.get_inherited_object_type(),
+                            ace.get_container_inherit(),
+                            ace.get_inherit_only()
+                        ));
                 }
             }
-            if res.delegations_found.iter().any(|(d, _, _)| !d.builtin) ||
-                    (!res.delegations_found.is_empty() && show_builtin) {
+            if res.delegations.iter().any(|(d, _, _)| !d.builtin) ||
+                    (!res.delegations.is_empty() && show_builtin) {
                 println!("       Documented delegations:");
-                for (delegation, trustee, _) in &res.delegations_found {
+                for (delegation, trustee, _) in &res.delegations {
                     if !show_builtin && delegation.builtin {
                         continue;
                     }

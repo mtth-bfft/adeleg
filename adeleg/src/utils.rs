@@ -268,22 +268,3 @@ pub(crate) fn ace_equivalent(a: &Ace, b: &Ace) -> bool {
 
     a == b
 }
-
-pub(crate) fn find_ace_positions(needle: &[Ace], haystack: &[Ace]) -> Option<Vec<usize>> {
-    let mut res = vec![];
-    let mut iter = haystack.iter().enumerate();
-    for needle_ace in needle {
-        let mut found = false;
-        while let Some((haystack_pos, haystack_ace)) = iter.next() {
-            if ace_equivalent(haystack_ace, needle_ace) {
-                res.push(haystack_pos);
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            return None;
-        }
-    }
-    Some(res)
-}

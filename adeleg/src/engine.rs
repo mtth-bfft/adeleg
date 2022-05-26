@@ -16,7 +16,7 @@ use winldap::error::LdapError;
 use winldap::control::{BerVal, BerEncodable, LdapControl};
 use crate::delegations::{Delegation, DelegationTemplate, DelegationLocation, DelegationRights};
 use crate::error::AdelegError;
-use crate::utils::{Domain, find_ace_positions, get_ace_derived_by_inheritance_from_schema, get_domains, get_attr_sid, get_attr_sd, ends_with_case_insensitive, capitalize};
+use crate::utils::{Domain, get_ace_derived_by_inheritance_from_schema, get_domains, get_attr_sid, get_attr_sd, ends_with_case_insensitive, capitalize, ace_equivalent};
 use crate::schema::Schema;
 use authz::Guid;
 
@@ -115,8 +115,8 @@ pub struct AdelegResult {
     pub(crate) non_canonical_ace: Option<Ace>,
     pub(crate) deleted_trustee: Vec<Ace>,
     pub(crate) orphan_aces: Vec<Ace>,
-    pub(crate) delegations_found: Vec<(Delegation, Sid, Vec<Ace>)>,
-    pub(crate) delegations_missing: Vec<(Delegation, Sid)>,
+    pub(crate) missing_aces: Vec<Ace>,
+    pub(crate) delegations: Vec<(Delegation, Sid, Vec<Ace>)>,
 }
 
 impl AdelegResult {
@@ -126,14 +126,13 @@ impl AdelegResult {
             self.non_canonical_ace.is_some() ||
             !self.deleted_trustee.is_empty() ||
             !self.orphan_aces.is_empty() ||
-            self.delegations_found.iter().any(|(d, _, _)| !d.builtin) ||
-            (!self.delegations_found.is_empty() && view_builtin_delegations) ||
-            !self.delegations_missing.is_empty()
+            !self.missing_aces.is_empty() ||
+            self.delegations.iter().any(|(d, _, _)| !d.builtin || view_builtin_delegations)
     }
 }
 
 impl<'a> Engine<'a> {
-    pub fn new(ldap: &'a LdapConnection, resolve_names: bool) -> Self {
+    pub fn new(ldap: &'a LdapConnection, resolve_names: bool) -> Self { // FIXME: replace with Result<Self, LdapError> and handle them gracefully
         let domains = match get_domains(&ldap) {
             Ok(v) => v,
             Err(e) => {
@@ -287,9 +286,9 @@ impl<'a> Engine<'a> {
                     owner: None,
                     deleted_trustee: vec![],
                     orphan_aces: vec![],
+                    missing_aces: vec![],
                     non_canonical_ace: dacl.check_canonicality().err(),
-                    delegations_found: vec![],
-                    delegations_missing: vec![],
+                    delegations: vec![],
                 };
                 for ace in dacl.aces {
                     if !self.is_ace_interesting(&ace, false, &[]) {
@@ -401,8 +400,8 @@ impl<'a> Engine<'a> {
                 non_canonical_ace: dacl.check_canonicality().err(),
                 deleted_trustee: vec![],
                 orphan_aces: vec![],
-                delegations_found: vec![],
-                delegations_missing: vec![],
+                missing_aces: vec![],
+                delegations: vec![],
             };
 
             for ace in dacl.aces {
@@ -518,33 +517,42 @@ impl<'a> Engine<'a> {
             }
         }
 
-        // Move ACEs from "orphan" to "delegations found" if they match an expected delegation
-        // Otherwise let them there, and add the delegation as "missing"
+        // Fill which delegations are expected and where
         for (trustee, expected_locations) in &self.expected_aces {
             for (location, expected_delegations) in expected_locations {
                 for (expected_delegation, expected_aces) in expected_delegations {
-                    let res = match res.get_mut(location) {
-                        Some(Ok(res)) => res,
-                        Some(Err(_)) => continue, // scanning that location failed, don't flag the delegation as "missing"
-                        None => continue, // delegation is for an object outside of our scope, ignore it
-                    };
+                    let entry = res.entry(location.clone()).or_insert_with(|| {
+                        Ok(AdelegResult {
+                            dacl_protected: false,
+                            owner: None,
+                            non_canonical_ace: None,
+                            deleted_trustee: vec![],
+                            orphan_aces: vec![],
+                            missing_aces: vec![],
+                            delegations: vec![],
+                        })
+                    });
+                    if let Ok(entry) = entry.as_mut() { // If scanning that location failed, don't flag the delegation as "missing"
+                        entry.delegations.push((expected_delegation.clone(), trustee.clone(), expected_aces.clone()));
+                    }
+                }
+            }
+        }
 
-                    let mut explained_aces = vec![false; res.orphan_aces.len()];
-                    if let Some(indexes) = find_ace_positions(expected_aces, &res.orphan_aces) {
-                        let mut matched_aces = vec![];
-                        for index in indexes {
-                            explained_aces[index] = true;
-                            matched_aces.push(res.orphan_aces[index].clone());
-                        }
-                        res.delegations_found.push((expected_delegation.to_owned(), trustee.clone(), matched_aces));
-                    } else {
-                        if !expected_delegation.builtin {
-                            res.delegations_missing.push((expected_delegation.to_owned(), trustee.clone()));
+        //  Fill missing ACEs based on expected ACEs, and delete "orphan" ACEs if they are actually explained by >= 1 delegation
+        for (_, res) in res.iter_mut() {
+            if let Ok(res) = res {
+                let mut explained_aces = vec![false; res.orphan_aces.len()];
+                for (_, _, aces) in &res.delegations {
+                    for expected_ace in aces {
+                        if let Some((pos, _)) = res.orphan_aces.iter().enumerate().find(|(_ , orphan_ace)| ace_equivalent(orphan_ace, expected_ace)) {
+                            explained_aces[pos] = true;
+                        } else {
+                            res.missing_aces.push(expected_ace.clone());
                         }
                     }
-
-                    res.orphan_aces = res.orphan_aces.drain(..).enumerate().filter(|(idx, _)| !explained_aces[*idx]).map(|(_, ace)| ace).collect();
                 }
+                res.orphan_aces = res.orphan_aces.drain(..).enumerate().filter(|(idx, _)| !explained_aces[*idx]).map(|(_, ace)| ace).collect();
             }
         }
 

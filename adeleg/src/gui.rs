@@ -392,16 +392,16 @@ impl BasicApp {
             let mut trustees: HashSet<Sid> = HashSet::new();
             for (_, res) in results.iter() {
                 if let Ok(res) = res {
+                    if let Some(owner) = &res.owner {
+                        trustees.insert(owner.clone());
+                    }
                     for ace in &res.orphan_aces {
                         trustees.insert(ace.trustee.clone());
                     }
-                    for (deleg, trustee) in &res.delegations_missing {
-                        if deleg.builtin && !view_builtin_delegations {
-                            continue;
-                        }
-                        trustees.insert(trustee.clone());
+                    for ace in &res.missing_aces {
+                        trustees.insert(ace.trustee.clone());
                     }
-                    for (deleg, trustee, _) in &res.delegations_found {
+                    for (deleg, trustee, _) in &res.delegations {
                         if deleg.builtin && !view_builtin_delegations {
                             continue;
                         }
@@ -585,6 +585,26 @@ impl BasicApp {
             let trustee = self.tree_path_to_trustee(&path);
             for (location, result) in results.iter() {
                 if let Ok(result) = result {
+                    if result.owner.as_ref() == Some(&trustee) {
+                        self.list.insert_item(nwg::InsertListViewItem {
+                            index: Some(0),
+                            column_index: 0,
+                            text: Some("Owner".to_owned()),
+                            image: None,
+                        });
+                        self.list.insert_item(nwg::InsertListViewItem {
+                            index: Some(0),
+                            column_index: 1,
+                            text: Some(location.to_string()),
+                            image: None,
+                        });
+                        self.list.insert_item(nwg::InsertListViewItem {
+                            index: Some(0),
+                            column_index: 2,
+                            text: Some("This principal owns the object, which implicitly grants them full control over it".to_owned()),
+                            image: None,
+                        });
+                    }
                     for ace in &result.orphan_aces {
                         if &ace.trustee != &trustee {
                             continue;
@@ -614,14 +634,14 @@ impl BasicApp {
                             image: None,
                         });
                     }
-                    for (delegation, deleg_trustee) in &result.delegations_missing {
-                        if deleg_trustee != &trustee || (delegation.builtin && !view_builtin_delegations) {
+                    for ace in &result.missing_aces {
+                        if &ace.trustee != &trustee {
                             continue;
                         }
                         self.list.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 0,
-                            text: Some("Missing delegation".to_owned()),
+                            text: Some(if ace.grants_access() { "Missing allow ACE" } else { "Missing deny ACE" }.to_owned()),
                             image: None,
                         });
                         self.list.insert_item(nwg::InsertListViewItem {
@@ -633,11 +653,17 @@ impl BasicApp {
                         self.list.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 2,
-                            text: Some(engine.describe_delegation_rights(&delegation.rights)),
+                            text: Some(engine.describe_ace(
+                                ace.access_mask,
+                                ace.get_object_type(),
+                                ace.get_inherited_object_type(),
+                                ace.get_container_inherit(),
+                                ace.get_inherit_only()
+                            )),
                             image: None,
                         });
                     }
-                    for (delegation, deleg_trustee, _) in &result.delegations_found {
+                    for (delegation, deleg_trustee, _) in &result.delegations {
                         if deleg_trustee != &trustee || (delegation.builtin && !view_builtin_delegations) {
                             continue;
                         }
@@ -799,30 +825,33 @@ impl BasicApp {
                         image: None,
                     });
                 }
-                for (delegation, trustee) in &result.delegations_missing {
-                    if delegation.builtin && !view_builtin_delegations {
-                        continue;
-                    }
+                for ace in &result.missing_aces {
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 0,
-                        text: Some("Missing delegation".to_owned()),
+                        text: Some(if ace.grants_access() { "Missing allow ACE" } else { "Missing deny ACE "}.to_owned()),
                         image: None,
                     });
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 1,
-                        text: Some(engine.resolve_sid(&trustee).map(|(dn, _)| dn).unwrap_or(trustee.to_string())),
+                        text: Some(engine.resolve_sid(&ace.trustee).map(|(dn, _)| dn).unwrap_or(ace.trustee.to_string())),
                         image: None,
                     });
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 2,
-                        text: Some(engine.describe_delegation_rights(&delegation.rights)),
+                        text: Some(engine.describe_ace(
+                            ace.access_mask,
+                            ace.get_object_type(),
+                            ace.get_inherited_object_type(),
+                            ace.get_container_inherit(),
+                            ace.get_inherit_only()
+                        )),
                         image: None,
                     });
                 }
-                for (delegation, trustee, _) in &result.delegations_found {
+                for (delegation, trustee, _) in &result.delegations {
                     if delegation.builtin && !view_builtin_delegations {
                         continue;
                     }
