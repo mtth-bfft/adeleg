@@ -37,9 +37,11 @@ pub const IGNORED_BLOCK_DACL_CLASSES: &[&str] = &[
 ];
 
 pub const IGNORED_BLOCK_DACL_DOMAIN_CONTAINERS: &[&str] = &[
-    "CN=AdminSDHolder,CN=System", // AdminSDHolder, for SDProp to protect administrators
-    "CN=WMIPolicy,CN=System", // by design, due to the way Group Policy Creator Owner is delegated
-    "CN=SOM,CN=WMIPolicy,CN=System", // by design, due to the way Group Policy Creator Owner is delegated
+    "CN=AdminSDHolder,CN=System",
+    "CN=VolumeTable,CN=FileLinks,CN=System",
+    "CN=Keys",
+    "CN=WMIPolicy,CN=System",
+    "CN=SOM,CN=WMIPolicy,CN=System",
 ];
 
 #[derive(Debug, Clone)]
