@@ -461,6 +461,15 @@ impl<'a> Engine<'a> {
                 (ace.access_mask & !(ADS_RIGHT_DELETE.0 as u32 | ADS_RIGHT_DS_DELETE_CHILD.0 as u32 | ADS_RIGHT_DS_DELETE_TREE.0 as u32)) == 0 {
             return false; // ignore "delete protection" ACEs
         }
+        if ace.trustee == everyone && !ace.grants_access() && ace.access_mask == ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32 {
+            if let Some(guid) = ace.get_object_type() {
+                if let Some(name) = self.schema.control_access_names.get(guid) {
+                    if name.to_ascii_lowercase() == "change password" {
+                        return false; // ignore ACEs put by e.g. dsa.msc when setting "Cannot change password" on users
+                    }
+                }
+            }
+        }
         if admincount && adminsdholder_aces.contains(&ace) {
             return false; // ignore ACEs from SDProp on objects marked with adminCount=1 (note: ACEs from
             // AdminSDHolder are not inherited, just copied, so comparison here is a simple fast hash
