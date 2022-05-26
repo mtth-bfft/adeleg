@@ -2,7 +2,7 @@ use core::fmt::Display;
 use core::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_WRITE_DAC, ADS_RIGHT_READ_CONTROL, ADS_RIGHT_DS_LIST_OBJECT, ADS_RIGHT_ACCESS_SYSTEM_SECURITY, ADS_RIGHT_DELETE, ADS_RIGHT_DS_WRITE_PROP, ADS_RIGHT_DS_CREATE_CHILD, ADS_RIGHT_DS_DELETE_CHILD, ADS_RIGHT_DS_CONTROL_ACCESS, ADS_RIGHT_DS_SELF, ADS_RIGHT_DS_DELETE_TREE, ADS_RIGHT_ACTRL_DS_LIST, ADS_RIGHT_DS_READ_PROP, ADS_RIGHT_WRITE_OWNER};
-use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION, SidTypeUser, SidTypeGroup, SidTypeComputer};
+use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION, SidTypeUser, SidTypeGroup, SidTypeComputer, OBJECT_INHERIT_ACE};
 use windows::Win32::Networking::Ldap::{LDAP_SCOPE_BASE, LDAP_SCOPE_SUBTREE, LDAP_SERVER_SD_FLAGS_OID};
 use windows::Win32::Security::SID_NAME_USE;
 use windows::Win32::Foundation::{PSID, PSTR, PWSTR, BOOL};
@@ -26,6 +26,8 @@ pub const IGNORED_ACCESS_RIGHTS: u32 = (ADS_RIGHT_READ_CONTROL.0 |
     ADS_RIGHT_ACTRL_DS_LIST.0 |
     ADS_RIGHT_DS_LIST_OBJECT.0 |
     ADS_RIGHT_DS_READ_PROP.0) as u32;
+
+pub const IGNORED_ACE_FLAGS: u8 = OBJECT_INHERIT_ACE.0 as u8; // there is no "object" in Active Directory, only containers
 
 pub const IGNORED_CONTROL_ACCESSES: &[&str] = &[
     "apply group policy", // applying a group policy does not mean we control it

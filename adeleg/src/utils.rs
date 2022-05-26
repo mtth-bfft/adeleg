@@ -265,6 +265,8 @@ pub(crate) fn ace_equivalent(a: &Ace, b: &Ace) -> bool {
 
     a.access_mask = a.access_mask & !(crate::engine::IGNORED_ACCESS_RIGHTS);
     b.access_mask = b.access_mask & !(crate::engine::IGNORED_ACCESS_RIGHTS);
+    a.flags = a.flags & !(crate::engine::IGNORED_ACE_FLAGS);
+    b.flags = b.flags & !(crate::engine::IGNORED_ACE_FLAGS);
 
     a == b
 }
