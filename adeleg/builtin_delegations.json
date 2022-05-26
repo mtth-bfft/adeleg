@@ -1,29 +1,9 @@
 [
     {
-        "trustee": { "sid": "S-1-3-0" },
-        "resource": { "dn": "DC=ForestDnsZones,DC=*" },
-        "access_mask": 8,
-        "object_type": "Validated write to computer attributes.",
-        "container_inherit": true,
-        "inherit_only": true,
-        "inherited_object_type": "computer",
-        "builtin": true
-    },
-    {
         "trustee": { "sam_account_name": "DnsAdmins" },
         "resource": { "dn": "CN=MicrosoftDNS,DC=DomainDnsZones,DC=*" },
         "access_mask": 983423,
         "container_inherit": true,
-        "builtin": true
-    },
-    {
-        "trustee": { "sid": "S-1-3-0" },
-        "resource": { "dn": "DC=DomainDnsZones,DC=*" },
-        "access_mask": 8,
-        "object_type": "Validated write to computer attributes.",
-        "container_inherit": true,
-        "inherit_only": true,
-        "inherited_object_type": "computer",
         "builtin": true
     },
     {
@@ -220,16 +200,6 @@
         "resource": { "dn": "CN=Builtin,DC=*" },
         "access_mask": 256,
         "object_type": "Create Inbound Forest Trust",
-        "builtin": true
-    },
-    {
-        "trustee": { "sid": "S-1-3-0" },
-        "resource": { "dn": "DC=*" },
-        "access_mask": 8,
-        "object_type": "Validated write to computer attributes.",
-        "container_inherit": true,
-        "inherit_only": true,
-        "inherited_object_type": "computer",
         "builtin": true
     },
     {
