@@ -101,7 +101,7 @@ pub(crate) struct Engine<'a> {
     schema: Schema,
     ignored_trustee_sids: HashSet<Sid>,
     pub(crate) naming_contexts: Vec<String>,
-    resolve_names: bool,
+    pub(crate) resolve_names: bool,
     pub(crate) templates: HashMap<String, DelegationTemplate>,
     pub(crate) delegations: Vec<Delegation>,
     expected_aces: HashMap<Sid, HashMap<DelegationLocation, Vec<(Delegation, Vec<Ace>)>>>,

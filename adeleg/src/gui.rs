@@ -28,6 +28,7 @@ pub struct BasicApp {
     delegation_file_paths: RefCell<Vec<String>>,
     view_by_trustee: RefCell<bool>,
     view_builtin_delegations: RefCell<bool>,
+    show_unresolved_access_rights: RefCell<bool>,
     show_unreadable_warnings: RefCell<bool>,
     results: Option<RefCell<HashMap<DelegationLocation, Result<AdelegResult, AdelegError>>>>,
 
@@ -73,6 +74,10 @@ pub struct BasicApp {
     #[nwg_control(parent: menu_view, text: "View unreadable entries as warnings")]
     #[nwg_events( OnMenuItemSelected: [BasicApp::toggle_view_unreadable_warnings] )]
     menu_view_unreadable_warnings: nwg::MenuItem,
+
+    #[nwg_control(parent: menu_view, text: "View unresolved access rights")]
+    #[nwg_events( OnMenuItemSelected: [BasicApp::toggle_view_unresolved_access_rights] )]
+    menu_view_unresolved_access_rights: nwg::MenuItem,
 
     #[nwg_control(parent: menu_view, text: "Index view by...")]
     menu_view_index_by: nwg::Menu,
@@ -170,6 +175,13 @@ impl BasicApp {
         let prev = *(self.show_unreadable_warnings.borrow());
 
         *self.show_unreadable_warnings.borrow_mut() = !prev;
+        self.redraw();
+    }
+
+    fn toggle_view_unresolved_access_rights(&self) {
+        let prev = *(self.show_unresolved_access_rights.borrow());
+
+        *self.show_unresolved_access_rights.borrow_mut() = !prev;
         self.redraw();
     }
 
@@ -374,13 +386,19 @@ impl BasicApp {
         let view_by_trustee = *self.view_by_trustee.borrow();
         let view_builtin_delegations = *self.view_builtin_delegations.borrow();
         let show_unreadable_warnings = *self.show_unreadable_warnings.borrow();
+        let show_unresolved_access_rights = *self.show_unresolved_access_rights.borrow();
         self.menu_view_index_by_resources.set_checked(!view_by_trustee);
         self.menu_view_index_by_trustees.set_checked(view_by_trustee);
         self.menu_view_builtin_delegations.set_checked(view_builtin_delegations);
+        self.menu_view_unresolved_access_rights.set_checked(show_unresolved_access_rights);
         self.menu_view_unreadable_warnings.set_checked(show_unreadable_warnings);
         self.window.focus();
         self.tree_view.clear();
         let results = self.results.as_ref().unwrap().borrow();
+        {
+            let mut engine = self.engine.as_ref().unwrap().borrow_mut();
+            engine.resolve_names = !show_unresolved_access_rights;
+        }
         let engine = self.engine.as_ref().unwrap().borrow();
 
         if view_by_trustee {
