@@ -310,8 +310,8 @@ impl BasicApp {
         {
             let mut results = self.results.as_ref().unwrap().borrow_mut();
             let mut engine = self.engine.as_ref().unwrap().borrow_mut();
-            let templates = self.template_file_paths.borrow();
-            let delegations = self.delegation_file_paths.borrow();
+            let mut templates = self.template_file_paths.borrow_mut();
+            let mut delegations = self.delegation_file_paths.borrow_mut();
 
             engine.templates.clear();
             engine.delegations.clear();
@@ -322,32 +322,34 @@ impl BasicApp {
                 std::process::exit(1);
             }
 
-            for file_path in templates.iter() {
+            templates.retain(|file_path| {
                 let json = match std::fs::read_to_string(file_path) {
                     Ok(s) => s,
                     Err(e) => {
                         BasicApp::show_error(&format!("Unable to read template file {} : {}", file_path, e));
-                        return;
+                        return false;
                     },
                 };
                 if let Err(e) = engine.load_template_json(&json) {
                     BasicApp::show_error(&format!("Unable to parse template file {} : {}", file_path, e));
-                    return;
+                    return false;
                 }
-            }
-            for file_path in delegations.iter() {
+                true
+            });
+            delegations.retain(|file_path| {
                 let json = match std::fs::read_to_string(file_path) {
                     Ok(s) => s,
                     Err(e) => {
                         BasicApp::show_error(&format!("Unable to read delegation file {} : {}", file_path, e));
-                        return;
+                        return false;
                     },
                 };
                 if let Err(e) = engine.load_delegation_json(&json) {
                     BasicApp::show_error(&format!("Unable to parse delegation file {} : {}", file_path, e));
-                    return;
+                    return false;
                 }
-            }
+                true
+            });
 
             match engine.run() {
                 Ok(r) => results.extend(r.into_iter()),
@@ -548,6 +550,20 @@ impl BasicApp {
             .map(|s| s.to_string_lossy().to_string())
             .collect();
 
+        let mut engine = self.engine.as_ref().unwrap().borrow_mut();
+        for file_path in &files {
+            let json = match std::fs::read_to_string(file_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    BasicApp::show_error(&format!("Unable to read template file {} : {}", file_path, e));
+                    return;
+                },
+            };
+            if let Err(e) = engine.load_template_json(&json) {
+                BasicApp::show_error(&format!("Unable to parse template file {} : {}", file_path, e));
+                return;
+            }
+        }
         self.template_file_paths.borrow_mut().append(&mut files);
     }
 
