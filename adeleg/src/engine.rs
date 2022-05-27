@@ -498,6 +498,7 @@ impl<'a> Engine<'a> {
     // Results are indexed by location (DN or class name) -> (orphan ACEs, delegations missing, delegations in place)
     pub fn run(&self) -> Result<HashMap<DelegationLocation, Result<AdelegResult, AdelegError>>, LdapError> {
         // Fetch all meaningful ACEs
+        eprintln!(" [.] Fetching schema information...");
         let schema_aces = self.get_schema_aces()?;
         let mut res = schema_aces.get(&self.root_domain.sid).cloned().unwrap_or_default();
         let mut naming_contexts = Vec::from(self.ldap.get_naming_contexts());
@@ -510,6 +511,7 @@ impl<'a> Engine<'a> {
                 .unwrap_or(&self.root_domain.sid);
             let schema_aces = schema_aces.get(domain_sid).expect("naming context without an associated domain");
 
+            eprintln!(" [.] Analysing {} ...", &naming_context);
             let mut explicit_aces = self.get_explicit_aces(&naming_context, schema_aces)?;
 
             // Move ACEs from "orphan" to "deleted trustee" if the trustee is from this forest and does
