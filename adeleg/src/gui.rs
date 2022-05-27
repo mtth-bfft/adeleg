@@ -105,7 +105,7 @@ pub struct BasicApp {
     tree_view: nwg::TreeView,
 
     #[nwg_control(list_style: nwg::ListViewStyle::Detailed, ex_flags: nwg::ListViewExFlags::from_bits(nwg::ListViewExFlags::HEADER_DRAG_DROP.bits() | nwg::ListViewExFlags::FULL_ROW_SELECT.bits() | nwg::ListViewExFlags::BORDER_SELECT.bits()).unwrap())]
-    #[nwg_layout_item(layout: grid, col: 1, row: 0, col_span: 2)]
+    #[nwg_layout_item(layout: grid, col: 1, row: 0, col_span: 3)]
     list: nwg::ListView,
 }
 
