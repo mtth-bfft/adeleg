@@ -249,6 +249,15 @@ pub(crate) fn ends_with_case_insensitive(haystack: &str, needle: &str) -> bool {
     haystack.to_lowercase().ends_with(&needle.to_lowercase())
 }
 
+pub(crate) fn get_parent_container<'a>(dn: &'a str, naming_context: &str) -> Option<&'a str> {
+    if let Some((_, parent)) = dn.split_once(',') {
+        if ends_with_case_insensitive(parent, naming_context) {
+            return Some(parent);
+        }
+    }
+    None
+}
+
 pub(crate) fn resolve_samaccountname_to_sid(ldap: &LdapConnection, samaccountname: &str, domain: &Domain) -> Result<Sid, LdapError> {
     let search = LdapSearch::new(&ldap, Some(&domain.distinguished_name), LDAP_SCOPE_SUBTREE, Some(&format!("(samAccountName={})", samaccountname)), Some(&["objectSid"]), &[]);
     let res = search.collect::<Result<Vec<LdapEntry>, LdapError>>()?;

@@ -16,7 +16,7 @@ use winldap::error::LdapError;
 use winldap::control::{BerVal, BerEncodable, LdapControl};
 use crate::delegations::{Delegation, DelegationTemplate, DelegationLocation, DelegationRights};
 use crate::error::AdelegError;
-use crate::utils::{Domain, get_ace_derived_by_inheritance_from_schema, get_domains, get_attr_sid, get_attr_sd, ends_with_case_insensitive, capitalize, ace_equivalent};
+use crate::utils::{Domain, get_ace_derived_by_inheritance_from_schema, get_domains, get_attr_sid, get_attr_sd, ends_with_case_insensitive, capitalize, ace_equivalent, get_parent_container};
 use crate::schema::Schema;
 use authz::Guid;
 
@@ -342,6 +342,8 @@ impl<'a> Engine<'a> {
             "objectClass",
             "objectSID",
             "adminCount",
+            "msDS-KrbTgtLinkBl",
+            "serverReference",
         ]), &[&sd_control]);
     
         let mut res: HashMap<DelegationLocation, Result<AdelegResult, AdelegError>> = HashMap::new();
@@ -371,8 +373,6 @@ impl<'a> Engine<'a> {
                     self.resolved_sid_to_type.borrow_mut().insert(object_sid.clone(), PrincipalType::from(most_specific_class.as_str()));
                 }
             }
-            let admincount = get_attr_str(&[&entry], &entry.dn, "admincount")
-                .unwrap_or("0".to_owned()) != "0";
             let owner = sd.owner.expect("assertion failed: object without an owner!?");
             let dacl = sd.dacl.expect("assertion failed: object without a DACL!?");
 
@@ -380,11 +380,16 @@ impl<'a> Engine<'a> {
                 Some(Ok(AdelegResult { dacl_protected, orphan_aces, ..  })) => (&orphan_aces[..], *dacl_protected),
                 _ => (&[] as &[Ace], false),
             };
+            let admincount = get_attr_str(&[&entry], &entry.dn, "admincount")
+                .unwrap_or("0".to_owned()) != "0";
             let dacl_protected = ((sd.controls as u32 & SE_DACL_PROTECTED) != 0) &&
                 !default_dacl_protected &&
                 !admincount &&
-                !IGNORED_BLOCK_DACL_CLASSES.contains(&most_specific_class.to_ascii_lowercase().as_str()) &&
+                !IGNORED_BLOCK_DACL_CLASSES.contains(&most_specific_class.as_str()) &&
                 !IGNORED_BLOCK_DACL_DOMAIN_CONTAINERS.iter().any(|rdn| entry.dn.eq_ignore_ascii_case(&format!("{},{}", rdn, naming_context)));
+
+            let secondary_krbtgt_server = get_attr_str(&[&entry], &entry.dn, "msds-krbtgtlinkbl").ok();
+            let reference_server = get_attr_str(&[&entry], &entry.dn, "serverreference").ok();
 
             // Derive ACEs from the defaultSecurityDescriptor of the object's class, and see if the ACE is a default.
             // These ACEs are not simply memcpy()ed, they are treated as if the object had inherited them from the schema.
@@ -410,6 +415,72 @@ impl<'a> Engine<'a> {
                 if !self.is_ace_interesting(&ace, admincount, &adminsdholder_aces[..], &default_aces) {
                     continue;
                 }
+
+                // RODCs have Change Password + Reset Password on their secondary krbtgt, nothing to say about that.
+                if ace.access_mask == ADS_RIGHT_DS_CONTROL_ACCESS.0 as u32 {
+                    if let Some(rodc_dn) = secondary_krbtgt_server.as_ref() {
+                        if let Some(guid) = ace.get_object_type() {
+                            if let Some(control_access_name) = self.schema.control_access_names.get(guid) {
+                                let control_access_name = control_access_name.to_ascii_lowercase();
+                                if ["change password", "reset password"].contains(&control_access_name.as_str()) && self.resolve_str_to_sid(&rodc_dn).as_ref() == Some(&ace.trustee) {
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // RODCs can create and delete nTDSConnection objects in their NTDS Settings
+                if most_specific_class == "ntdsdsa" && (ace.access_mask == ADS_RIGHT_DS_CREATE_CHILD.0 as u32 || (ace.access_mask == ADS_RIGHT_DELETE.0 as u32 && ace.get_inherit_only())) {
+                    if let Some(server_dn) = get_parent_container(&entry.dn, naming_context) {
+                        let mut search = LdapSearch::new(self.ldap, Some(server_dn), LDAP_SCOPE_BASE,
+                            Some("(objectClass=server)"), Some(&["serverReference"]), &[]);
+                        if let Some(Ok(entry)) = search.next() {
+                            if let Ok(rodc_dn) = get_attr_str(&[&entry], &entry.dn, "serverreference") {
+                                if let Some(rodc_sid) = self.resolve_str_to_sid(&rodc_dn) {
+                                    if ace.trustee == rodc_sid {
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // RODCs can write attributes "schedule" and "fromServer" of their nTDSConnection object in their NTDS Settings, nothing to say about that.
+                if most_specific_class == "ntdsconnection" && (ace.access_mask & !(ADS_RIGHT_DS_READ_PROP.0 as u32 | ADS_RIGHT_DS_WRITE_PROP.0 as u32)) == 0 {
+                    if ace.get_object_type() == Some(&Guid::try_from("dd712224-10e4-11d0-a05f-00aa006c33ed").unwrap()) ||
+                            ace.get_object_type() == Some(&Guid::try_from("bf967979-0de6-11d0-a285-00aa003049e2").unwrap()) {
+                        if let Some(ntds_settings_dn) = get_parent_container(&entry.dn, naming_context) {
+                            if let Some(server_dn) = get_parent_container(ntds_settings_dn, naming_context) {
+                                let mut search = LdapSearch::new(self.ldap, Some(server_dn), LDAP_SCOPE_BASE,
+                                                            Some("(objectClass=server)"), Some(&["serverReference"]), &[]);
+                                if let Some(Ok(entry)) = search.next() {
+                                    if let Ok(rodc_dn) = get_attr_str(&[&entry], &entry.dn, "serverreference") {
+                                        if let Some(rodc_sid) = self.resolve_str_to_sid(&rodc_dn) {
+                                            if ace.trustee == rodc_sid {
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // RODCs have a validated write on their server object to update its dnsHostname, nothing to say about that.
+                if most_specific_class == "server" && ace.access_mask == ADS_RIGHT_DS_SELF.0 as u32
+                        && ace.get_object_type() == Some(&Guid::try_from("72e39547-7b18-11d1-adef-00c04fd8d5cd").unwrap()) {
+                    if let Some(rodc_dn) = reference_server.as_deref() {
+                        if let Some(rodc_sid) = self.resolve_str_to_sid(&rodc_dn) {
+                            if ace.trustee == rodc_sid {
+                                continue;
+                            }
+                        }
+                    }
+                }
+
                 record.orphan_aces.push(ace);
             }
             if record.needs_to_be_displayed(true) {
