@@ -398,10 +398,7 @@ impl BasicApp {
                     for ace in &res.orphan_aces {
                         trustees.insert(ace.trustee.clone());
                     }
-                    for ace in &res.missing_aces {
-                        trustees.insert(ace.trustee.clone());
-                    }
-                    for (deleg, trustee, _) in &res.delegations {
+                    for (deleg, trustee, _, _) in &res.delegations {
                         if deleg.builtin && !view_builtin_delegations {
                             continue;
                         }
@@ -589,7 +586,7 @@ impl BasicApp {
                         self.list.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 0,
-                            text: Some("Owner".to_owned()),
+                            text: Some("\u{E13D} Owner".to_owned()),
                             image: None,
                         });
                         self.list.insert_item(nwg::InsertListViewItem {
@@ -612,7 +609,7 @@ impl BasicApp {
                         self.list.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 0,
-                            text: Some(if ace.grants_access() { "Allow ACE" } else { "Deny ACE" }.to_owned()),
+                            text: Some(if ace.grants_access() { "\u{1f511} Allow ACE" } else { "\u{1f512} Deny ACE "}.to_owned()),
                             image: None,
                         });
                         self.list.insert_item(nwg::InsertListViewItem {
@@ -634,43 +631,66 @@ impl BasicApp {
                             image: None,
                         });
                     }
-                    for ace in &result.missing_aces {
-                        if &ace.trustee != &trustee {
-                            continue;
-                        }
-                        self.list.insert_item(nwg::InsertListViewItem {
-                            index: Some(0),
-                            column_index: 0,
-                            text: Some(if ace.grants_access() { "Missing allow ACE" } else { "Missing deny ACE" }.to_owned()),
-                            image: None,
-                        });
-                        self.list.insert_item(nwg::InsertListViewItem {
-                            index: Some(0),
-                            column_index: 1,
-                            text: Some(location.to_string()),
-                            image: None,
-                        });
-                        self.list.insert_item(nwg::InsertListViewItem {
-                            index: Some(0),
-                            column_index: 2,
-                            text: Some(engine.describe_ace(
-                                ace.access_mask,
-                                ace.get_object_type(),
-                                ace.get_inherited_object_type(),
-                                ace.get_container_inherit(),
-                                ace.get_inherit_only()
-                            )),
-                            image: None,
-                        });
-                    }
-                    for (delegation, deleg_trustee, _) in &result.delegations {
+                    for (delegation, deleg_trustee, aces_found, aces_missing) in &result.delegations {
                         if deleg_trustee != &trustee || (delegation.builtin && !view_builtin_delegations) {
                             continue;
                         }
+                        for ace in aces_found {
+                            self.list.insert_item(nwg::InsertListViewItem {
+                                index: Some(0),
+                                column_index: 0,
+                                text: Some(if ace.grants_access() { "    \u{E10B} Expected allow ACE found" } else { "    \u{E10B} Expected deny ACE found" }.to_owned()),
+                                image: None,
+                            });
+                            self.list.insert_item(nwg::InsertListViewItem {
+                                index: Some(0),
+                                column_index: 1,
+                                text: None,
+                                image: None,
+                            });
+                            self.list.insert_item(nwg::InsertListViewItem {
+                                index: Some(0),
+                                column_index: 2,
+                                text: Some(engine.describe_ace(
+                                    ace.access_mask,
+                                    ace.get_object_type(),
+                                    ace.get_inherited_object_type(),
+                                    ace.get_container_inherit(),
+                                    ace.get_inherit_only()
+                                )),
+                                image: None,
+                            });
+                        }
+                        for ace in aces_missing {
+                            self.list.insert_item(nwg::InsertListViewItem {
+                                index: Some(0),
+                                column_index: 0,
+                                text: Some(if ace.grants_access() { "    \u{E10A} Expected allow ACE missing" } else { "    \u{E10A} Expected deny ACE missing" }.to_owned()),
+                                image: None,
+                            });
+                            self.list.insert_item(nwg::InsertListViewItem {
+                                index: Some(0),
+                                column_index: 1,
+                                text: None,
+                                image: None,
+                            });
+                            self.list.insert_item(nwg::InsertListViewItem {
+                                index: Some(0),
+                                column_index: 2,
+                                text: Some(engine.describe_ace(
+                                    ace.access_mask,
+                                    ace.get_object_type(),
+                                    ace.get_inherited_object_type(),
+                                    ace.get_container_inherit(),
+                                    ace.get_inherit_only()
+                                )),
+                                image: None,
+                            });
+                        }
                         self.list.insert_item(nwg::InsertListViewItem {
                             index: Some(0),
                             column_index: 0,
-                            text: Some(if delegation.builtin { "Built-in" } else { "Delegation" }.to_owned()),
+                            text: Some(if delegation.builtin { "\u{E115} Built-in delegation" } else { "\u{E132} Delegation" }.to_owned()),
                             image: None,
                         });
                         self.list.insert_item(nwg::InsertListViewItem {
@@ -698,7 +718,7 @@ impl BasicApp {
                             self.list.insert_item(nwg::InsertListViewItem {
                                 index: Some(0),
                                 column_index: 0,
-                                text: Some("Warning".to_owned()),
+                                text: Some("\u{1f518} Warning".to_owned()),
                                 image: None,
                             });
                             self.list.insert_item(nwg::InsertListViewItem {
@@ -721,7 +741,7 @@ impl BasicApp {
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 0,
-                        text: Some("Warning".to_owned()),
+                        text: Some("\u{E13D} Owner".to_owned()),
                         image: None,
                     });
                     self.list.insert_item(nwg::InsertListViewItem {
@@ -741,7 +761,7 @@ impl BasicApp {
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 0,
-                        text: Some("Warning".to_owned()),
+                        text: Some("\u{1f518} Warning".to_owned()),
                         image: None,
                     });
                     self.list.insert_item(nwg::InsertListViewItem {
@@ -761,7 +781,7 @@ impl BasicApp {
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 0,
-                        text: Some("Warning".to_owned()),
+                        text: Some("\u{1f518} Warning".to_owned()),
                         image: None,
                     });
                     self.list.insert_item(nwg::InsertListViewItem {
@@ -791,7 +811,7 @@ impl BasicApp {
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 0,
-                        text: Some("Warning".to_owned()),
+                        text: Some("\u{1f518} Warning".to_owned()),
                         image: None,
                     });
                     self.list.insert_item(nwg::InsertListViewItem {
@@ -812,7 +832,7 @@ impl BasicApp {
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 0,
-                        text: Some(if ace.grants_access() { "Allow ACE" } else { "Deny ACE "}.to_owned()),
+                        text: Some(if ace.grants_access() { "\u{1f511} Allow ACE" } else { "\u{1f512} Deny ACE "}.to_owned()),
                         image: None,
                     });
                     self.list.insert_item(nwg::InsertListViewItem {
@@ -834,40 +854,66 @@ impl BasicApp {
                         image: None,
                     });
                 }
-                for ace in &result.missing_aces {
-                    self.list.insert_item(nwg::InsertListViewItem {
-                        index: Some(0),
-                        column_index: 0,
-                        text: Some(if ace.grants_access() { "Missing allow ACE" } else { "Missing deny ACE "}.to_owned()),
-                        image: None,
-                    });
-                    self.list.insert_item(nwg::InsertListViewItem {
-                        index: Some(0),
-                        column_index: 1,
-                        text: Some(engine.resolve_sid(&ace.trustee).map(|(dn, _)| dn).unwrap_or(ace.trustee.to_string())),
-                        image: None,
-                    });
-                    self.list.insert_item(nwg::InsertListViewItem {
-                        index: Some(0),
-                        column_index: 2,
-                        text: Some(engine.describe_ace(
-                            ace.access_mask,
-                            ace.get_object_type(),
-                            ace.get_inherited_object_type(),
-                            ace.get_container_inherit(),
-                            ace.get_inherit_only()
-                        )),
-                        image: None,
-                    });
-                }
-                for (delegation, trustee, _) in &result.delegations {
+                for (delegation, trustee, aces_found, aces_missing) in &result.delegations {
                     if delegation.builtin && !view_builtin_delegations {
                         continue;
+                    }
+                    for ace in aces_found {
+                        self.list.insert_item(nwg::InsertListViewItem {
+                            index: Some(0),
+                            column_index: 0,
+                            text: Some(if ace.grants_access() { "    \u{E10B} Expected allow ACE found" } else { "    \u{E10B} Expected deny ACE found" }.to_owned()),
+                            image: None,
+                        });
+                        self.list.insert_item(nwg::InsertListViewItem {
+                            index: Some(0),
+                            column_index: 1,
+                            text: None,
+                            image: None,
+                        });
+                        self.list.insert_item(nwg::InsertListViewItem {
+                            index: Some(0),
+                            column_index: 2,
+                            text: Some(engine.describe_ace(
+                                ace.access_mask,
+                                ace.get_object_type(),
+                                ace.get_inherited_object_type(),
+                                ace.get_container_inherit(),
+                                ace.get_inherit_only()
+                            )),
+                            image: None,
+                        });
+                    }
+                    for ace in aces_missing {
+                        self.list.insert_item(nwg::InsertListViewItem {
+                            index: Some(0),
+                            column_index: 0,
+                            text: Some(if ace.grants_access() { "    \u{E10A} Expected allow ACE missing" } else { "    \u{E10A} Expected deny ACE missing" }.to_owned()),
+                            image: None,
+                        });
+                        self.list.insert_item(nwg::InsertListViewItem {
+                            index: Some(0),
+                            column_index: 1,
+                            text: None,
+                            image: None,
+                        });
+                        self.list.insert_item(nwg::InsertListViewItem {
+                            index: Some(0),
+                            column_index: 2,
+                            text: Some(engine.describe_ace(
+                                ace.access_mask,
+                                ace.get_object_type(),
+                                ace.get_inherited_object_type(),
+                                ace.get_container_inherit(),
+                                ace.get_inherit_only()
+                            )),
+                            image: None,
+                        });
                     }
                     self.list.insert_item(nwg::InsertListViewItem {
                         index: Some(0),
                         column_index: 0,
-                        text: Some(if delegation.builtin { "Built-in" } else { "Delegation" }.to_owned()),
+                        text: Some(if delegation.builtin { "\u{E115} Built-in delegation" } else { "\u{E132} Delegation" }.to_owned()),
                         image: None,
                     });
                     self.list.insert_item(nwg::InsertListViewItem {

@@ -117,8 +117,7 @@ pub struct AdelegResult {
     pub(crate) non_canonical_ace: Option<Ace>,
     pub(crate) deleted_trustee: Vec<Ace>,
     pub(crate) orphan_aces: Vec<Ace>,
-    pub(crate) missing_aces: Vec<Ace>,
-    pub(crate) delegations: Vec<(Delegation, Sid, Vec<Ace>)>,
+    pub(crate) delegations: Vec<(Delegation, Sid, Vec<Ace>, Vec<Ace>)>,
 }
 
 impl AdelegResult {
@@ -128,8 +127,7 @@ impl AdelegResult {
             self.non_canonical_ace.is_some() ||
             !self.deleted_trustee.is_empty() ||
             !self.orphan_aces.is_empty() ||
-            !self.missing_aces.is_empty() ||
-            self.delegations.iter().any(|(d, _, _)| !d.builtin || view_builtin_delegations)
+            self.delegations.iter().any(|(d, _, _, _)| !d.builtin || view_builtin_delegations)
     }
 }
 
@@ -159,7 +157,7 @@ impl<'a> Engine<'a> {
                 std::process::exit(1);
             }
         };
-    
+
         let schema = match Schema::query(&ldap) {
             Ok(s) => s,
             Err(e) => {
@@ -288,7 +286,6 @@ impl<'a> Engine<'a> {
                     owner: None,
                     deleted_trustee: vec![],
                     orphan_aces: vec![],
-                    missing_aces: vec![],
                     non_canonical_ace: dacl.check_canonicality().err(),
                     delegations: vec![],
                 };
@@ -407,7 +404,6 @@ impl<'a> Engine<'a> {
                 non_canonical_ace: dacl.check_canonicality().err(),
                 deleted_trustee: vec![],
                 orphan_aces: vec![],
-                missing_aces: vec![],
                 delegations: vec![],
             };
 
@@ -620,7 +616,7 @@ impl<'a> Engine<'a> {
             res.extend(explicit_aces);
         }
 
-        // Fill which delegations are expected and where
+        // Fill which delegations are expected and where. Flag all their ACEs as missing, at first.
         for (trustee, expected_locations) in &self.expected_aces {
             for (location, expected_delegations) in expected_locations {
                 for (expected_delegation, expected_aces) in expected_delegations {
@@ -631,38 +627,42 @@ impl<'a> Engine<'a> {
                             non_canonical_ace: None,
                             deleted_trustee: vec![],
                             orphan_aces: vec![],
-                            missing_aces: vec![],
                             delegations: vec![],
                         })
                     });
                     if let Ok(entry) = entry.as_mut() { // If scanning that location failed, don't flag the delegation as "missing"
-                        entry.delegations.push((expected_delegation.clone(), trustee.clone(), expected_aces.clone()));
+                        entry.delegations.push((expected_delegation.clone(), trustee.clone(), vec![], expected_aces.clone()));
                     }
                 }
             }
         }
 
-        //  Fill missing ACEs based on expected ACEs, and delete "orphan" ACEs if they are actually explained by >= 1 delegation
+        // Move ACEs from "orphan" to their associated delegation(s) (1 ACE can be there for possibly multiple delegations)
         for (_, res) in res.iter_mut() {
             if let Ok(res) = res {
-                let mut explained_aces = vec![false; res.orphan_aces.len()];
-                for (expected_delegation, _, aces) in &res.delegations {
-                    for expected_ace in aces {
-                        let mut found = false;
-                        for (idx, orphan_ace) in res.orphan_aces.iter().enumerate() {
-                            if ace_equivalent(orphan_ace, expected_ace) {
-                                explained_aces[idx] = true;
-                                found = true;
+                res.orphan_aces.retain(|orphan_ace| {
+                    let mut explained_by_at_least_one_delegation = false;
+                    for (_, _, aces_found, aces_missing) in res.delegations.iter_mut() {
+                        aces_missing.retain(|missing_ace| {
+                            if ace_equivalent(orphan_ace, missing_ace) {
                                 // Sometimes (e.g. the default ACE for DnsAdmins on the MicrosoftDNS system container in Windows Server 2003), ACEs are duplicated.
                                 // Finding the first matching ACE is not enough, do not break here.
+                                aces_found.push(missing_ace.clone());
+                                explained_by_at_least_one_delegation = true;
+                                false
+                            } else {
+                                true
                             }
-                        }
-                        if !found && !expected_delegation.builtin {
-                            res.missing_aces.push(expected_ace.clone());
-                        }
+                        });
+                    }
+                    !explained_by_at_least_one_delegation
+                });
+                // Do not flag missing ACEs from built-in delegations as missing
+                for (delegation, _, _, missing_aces) in res.delegations.iter_mut() {
+                    if delegation.builtin {
+                        missing_aces.clear();
                     }
                 }
-                res.orphan_aces = res.orphan_aces.drain(..).enumerate().filter(|(idx, _)| !explained_aces[*idx]).map(|(_, ace)| ace).collect();
             }
         }
 
