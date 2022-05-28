@@ -17,7 +17,7 @@ native-windows-derive = "1.0.3"
 csv = "1.1.6"
 
 [dependencies.windows]
-version = "0.32.0"
+version = "0.37.0"
 features = [
     "alloc",
     "Win32_Security",
