@@ -6,7 +6,7 @@ use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMA
 use windows::Win32::Networking::Ldap::{LDAP_SCOPE_BASE, LDAP_SCOPE_SUBTREE, LDAP_SERVER_SD_FLAGS_OID};
 use windows::Win32::Security::SID_NAME_USE;
 use windows::Win32::Foundation::{PSID, PSTR, PWSTR, BOOL};
-use authz::{SecurityDescriptor, Sid, Ace};
+use authz::{SecurityDescriptor, Sid, Ace, Acl};
 use windows::Win32::System::LibraryLoader::{LoadLibraryA, GetProcAddress};
 use windows::Win32::System::SystemServices::SE_DACL_PROTECTED;
 use winldap::connection::LdapConnection;
@@ -286,7 +286,7 @@ impl<'a> Engine<'a> {
                     owner: None,
                     deleted_trustee: vec![],
                     orphan_aces: vec![],
-                    non_canonical_ace: dacl.check_canonicality().err(),
+                    non_canonical_ace: self.check_acl_canonicality(&dacl).err(),
                     delegations: vec![],
                 };
                 for ace in dacl.aces {
@@ -401,7 +401,7 @@ impl<'a> Engine<'a> {
             let mut record = AdelegResult {
                 dacl_protected,
                 owner,
-                non_canonical_ace: dacl.check_canonicality().err(),
+                non_canonical_ace: self.check_acl_canonicality(&dacl).err(),
                 deleted_trustee: vec![],
                 orphan_aces: vec![],
                 delegations: vec![],
@@ -509,6 +509,27 @@ impl<'a> Engine<'a> {
             }
         }
         Ok(res)
+    }
+
+    pub fn check_acl_canonicality(&self, acl: &Acl) -> Result<(), Ace> {
+        let mut prev_ace: Option<&Ace> = None;
+        for ace in &acl.aces {
+            if let Some(prev_ace) = prev_ace {
+                // Bad patterns we are looking for:
+                // Explicit ACE after an inherited one
+                if !ace.is_inherited() && prev_ace.is_inherited() {
+                    return Err(ace.to_owned());
+                }
+                // Deny ACE after an allow one amongst explicit ACEs
+                // (in inherited ACEs, deny ACEs of a grandparent can occur after allow ones of a parent)
+                if !ace.grants_access() && prev_ace.grants_access() && !ace.is_inherited() && !prev_ace.is_inherited() {
+                    return Err(ace.to_owned());
+                }
+            }
+
+            prev_ace = Some(ace);
+        }
+        Ok(())
     }
 
     pub fn is_ace_interesting(&self, ace: &Ace, admincount: bool, adminsdholder_aces: &[Ace], default_aces: &[Ace]) -> bool {
