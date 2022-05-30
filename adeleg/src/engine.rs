@@ -16,7 +16,7 @@ use winldap::error::LdapError;
 use winldap::control::{BerVal, BerEncodable, LdapControl};
 use crate::delegations::{Delegation, DelegationTemplate, DelegationLocation, DelegationRights};
 use crate::error::AdelegError;
-use crate::utils::{Domain, get_ace_derived_by_inheritance_from_schema, get_domains, get_attr_sid, get_attr_sd, ends_with_case_insensitive, capitalize, ace_equivalent, get_parent_container};
+use crate::utils::{Domain, get_ace_derived_by_inheritance_from_schema, get_domains, get_attr_sid, get_attr_sids, get_attr_sd, ends_with_case_insensitive, capitalize, ace_equivalent, get_parent_container};
 use crate::schema::Schema;
 use authz::Guid;
 
@@ -112,6 +112,7 @@ pub(crate) struct Engine<'a> {
 
 #[derive(Debug, Clone)]
 pub struct AdelegResult {
+    pub(crate) class_guid: Guid,
     pub(crate) dacl_protected: bool,
     pub(crate) owner: Option<Sid>,
     pub(crate) non_canonical_ace: Option<Ace>,
@@ -282,6 +283,7 @@ impl<'a> Engine<'a> {
                     None => continue,
                 };
                 let mut entry = AdelegResult {
+                    class_guid: Guid::try_from("bf967a83-0de6-11d0-a285-00aa003049e2").unwrap(), // Schema-Class GUID
                     dacl_protected,
                     owner: None,
                     deleted_trustee: vec![],
@@ -295,9 +297,7 @@ impl<'a> Engine<'a> {
                     }
                     entry.orphan_aces.push(ace);
                 }
-                if entry.needs_to_be_displayed(true) {
-                    res.or_insert(Ok(entry));
-                }
+                res.or_insert(Ok(entry));
             }
         }
         Ok(res)
@@ -346,21 +346,21 @@ impl<'a> Engine<'a> {
         let mut res: HashMap<DelegationLocation, Result<AdelegResult, AdelegError>> = HashMap::new();
         for entry in search {
             let entry = entry?;
-            let res = res.entry(DelegationLocation::Dn(entry.dn.clone()));
             let sd = match get_attr_sd(&[&entry], &entry.dn, "ntsecuritydescriptor") {
                 Ok(sd) => sd,
                 Err(e) => {
-                    res.or_insert(Err(AdelegError::LdapQueryFailed(e)));
+                    res.insert(DelegationLocation::Dn(entry.dn), Err(AdelegError::LdapQueryFailed(e)));
                     continue;
                 },
             };
             let most_specific_class = match get_attr_strs(&[&entry], &entry.dn, "objectclass") {
                 Ok(mut v) => v.pop().expect("assertion failed: object with an empty objectClass!?").to_ascii_lowercase(),
                 Err(e) => {
-                    res.or_insert(Err(AdelegError::LdapQueryFailed(e)));
+                    res.insert(DelegationLocation::Dn(entry.dn), Err(AdelegError::LdapQueryFailed(e)));
                     continue;
                 }
             };
+            let most_specific_class_guid = self.schema.class_guids.get(&most_specific_class).expect("assertion failed: unknown objectClass!?");
             if let Ok(object_sid) = get_attr_sid(&[&entry], &entry.dn, "objectsid") {
                 // Some well-known SIDs will be found this way, in CN=ForeignSecurityPrincipals in each domain.
                 // We prefer these SIDs to be shown as a resolved entry (in a "Global" section), so we first try to look them
@@ -399,6 +399,7 @@ impl<'a> Engine<'a> {
                 Some(owner)
             };
             let mut record = AdelegResult {
+                class_guid: most_specific_class_guid.clone(),
                 dacl_protected,
                 owner,
                 non_canonical_ace: self.check_acl_canonicality(&dacl).err(),
@@ -479,9 +480,7 @@ impl<'a> Engine<'a> {
 
                 record.orphan_aces.push(ace);
             }
-            if record.needs_to_be_displayed(true) {
-                res.or_insert(Ok(record));
-            }
+            res.insert(DelegationLocation::Dn(entry.dn), Ok(record));
         }
 
         // Remove any ACE whose trustee is a parent object (parents control their child containers anyway,
@@ -602,13 +601,35 @@ impl<'a> Engine<'a> {
             eprintln!(" [.] Analysing {} ...", &naming_context);
             let mut explicit_aces = self.get_explicit_aces(&naming_context, schema_aces)?;
 
+            // All DelegationLocations have a record, even those we have nothing significant to say about.
+            // Free that memory as soon as possible, only keeping non-empty records and their parent records
+            // (required because of the CREATE_CHILD check: parent records may be of class A and we might
+            // have to lookup their class GUID to get their default ACL and see if that grants CREATE_CHILD).
+            let mut records_to_keep = HashSet::new();
+            for (location, record) in &explicit_aces {
+                if let DelegationLocation::Dn(child_dn) = location {
+                    if let Some(parent_dn) = get_parent_container(child_dn, &naming_context) {
+                        records_to_keep.insert(DelegationLocation::Dn(parent_dn.to_owned()));
+                    }
+                }
+                let keep = if let Ok(record) = record {
+                    record.dacl_protected || !record.delegations.is_empty() || !record.deleted_trustee.is_empty() || record.non_canonical_ace.is_some() || record.owner.is_some() || !record.orphan_aces.is_empty()
+                } else {
+                    true
+                };
+                if keep {
+                    records_to_keep.insert(location.clone());
+                }
+            }
+            explicit_aces.retain(|location, _| records_to_keep.contains(location));
+
             // Move ACEs from "orphan" to "deleted trustee" if the trustee is from this forest and does
             // not exist anymore
-            let domain_sid = domain_sid.with_rid(0);
+            let domain_sid_with_suffix = domain_sid.with_rid(0);
             for (_, result) in explicit_aces.iter_mut() {
                 if let Ok(result) = result {
                     result.orphan_aces.retain(|ace| {
-                        if ace.trustee.shares_prefix_with(&domain_sid) && self.resolve_sid(&ace.trustee).is_none() {
+                        if ace.trustee.shares_prefix_with(&domain_sid_with_suffix) && self.resolve_sid(&ace.trustee).is_none() {
                             result.deleted_trustee.push(ace.clone());
                             false
                         } else {
@@ -634,6 +655,95 @@ impl<'a> Engine<'a> {
                 }
             }
 
+            // When CREATE_CHILD is delegated on a container, child objects may be owned by
+            // trustees and have "explicit" ACEs derived from CREATOR_OWNER ACEs on the container.
+            // For each such trustee, we need to find out if they have such a delegation.
+            let mut owners_to_tolerate = vec![];
+            for (child_location, res) in &explicit_aces {
+                if let Ok(child_res) = res {
+                    let owner = if let Some(owner) = &child_res.owner {
+                        owner
+                    } else {
+                        continue;
+                    };
+                    let child_dn = match child_location {
+                        DelegationLocation::Dn(s) => s,
+                        _ => continue,
+                    };
+                    // Go up the hierarchy of container (possibly up to the naming context root)
+                    // until we find either an Allow or Deny ACE for CREATE_CHILD of this object type
+                    let mut owner_could_have_created = false;
+                    let mut cursor_dn = child_dn.as_str();
+                    while !owner_could_have_created {
+                        cursor_dn = match get_parent_container(cursor_dn, &naming_context) {
+                            Some(s) => s,
+                            None => break,
+                        };
+                        let cursor_res = match explicit_aces.get(&DelegationLocation::Dn(cursor_dn.to_owned())) {
+                            Some(Ok(res)) => res,
+                            _ => continue,
+                        };
+                        // You would think looking at orphan ACEs would be enough. But some schema
+                        // ACEs offer CREATE_CHILD by default (e.g. to authenticated users, on all DnsZones). We have to merge
+                        // the two before looking up.
+                        let cursor_class_name = self.schema.class_guids.iter()
+                            .find(|(_, guid)| &&cursor_res.class_guid == guid)
+                            .map(|(name, _)| name)
+                            .expect("assertion failed: object with objectClass not in schema?!");
+                        let aces = cursor_res.orphan_aces.iter().chain(
+                            if let Some(Ok(schema_aces)) = schema_aces.get(&DelegationLocation::DefaultSecurityDescriptor(cursor_class_name.clone())) {
+                                schema_aces.orphan_aces.iter()
+                            } else {
+                                (&[]).iter()
+                            }
+                        );
+                        let mut must_be_member_of = HashSet::new();
+                        let mut must_not_be_member_of = HashSet::new();
+                        for ace in aces {
+                            if (ace.access_mask & (ADS_RIGHT_DS_CREATE_CHILD.0 as u32)) == 0 {
+                                continue;
+                            }
+                            if let Some(class_guid) = ace.get_object_type() {
+                                if class_guid != &child_res.class_guid {
+                                    continue;
+                                }
+                            }
+                            if ace.grants_access() {
+                                must_be_member_of.insert(&ace.trustee);
+                            } else {
+                                must_not_be_member_of.insert(&ace.trustee);
+                            }
+                        }
+                        let groups = self.fetch_principal_groups(owner)?;
+                        for sid_allowed_to_create in &must_be_member_of {
+                            if groups.contains(sid_allowed_to_create) {
+                                owner_could_have_created = true;
+                                break;
+                            }
+                        }
+                        for sid_denied_creation in &must_not_be_member_of {
+                            if groups.contains(sid_denied_creation) {
+                                owner_could_have_created = false;
+                                break;
+                            }
+                        }
+                        // Stop as soon as we have found a matching delegation, because a Deny ACE could prevent
+                        // anyone from creating objects upper in the hierarchy, but we assume ACLs are in
+                        // canonical order and the delegation at the current level takes precedence.
+                    }
+                    if owner_could_have_created {
+                        owners_to_tolerate.push(child_location.clone());
+                    }
+                }
+            }
+            for location in owners_to_tolerate {
+                explicit_aces.get_mut(&location)
+                    .expect("assertion failed: object vanished?!")
+                    .as_mut()
+                    .expect("assertion failed: record became an error during owner analysis?!")
+                    .owner = None;
+            }
+
             res.extend(explicit_aces);
         }
 
@@ -643,6 +753,7 @@ impl<'a> Engine<'a> {
                 for (expected_delegation, expected_aces) in expected_delegations {
                     let entry = res.entry(location.clone()).or_insert_with(|| {
                         Ok(AdelegResult {
+                            class_guid: Guid::try_from("bf967a8b-0de6-11d0-a285-00aa003049e2").unwrap(), // container class GUID
                             dacl_protected: false,
                             owner: None,
                             non_canonical_ace: None,
@@ -688,6 +799,23 @@ impl<'a> Engine<'a> {
         }
 
         Ok(res)
+    }
+
+    pub fn fetch_principal_groups(&self, principal: &Sid) -> Result<HashSet<Sid>, LdapError> {
+        let mut groups = HashSet::new();
+        groups.insert(principal.clone());
+        groups.insert(Sid::try_from("S-1-5-11").unwrap());
+        let base = format!("<SID={}>", principal);
+        let search = LdapSearch::new(self.ldap, Some(&base), LDAP_SCOPE_BASE,
+            None, Some(&["tokenGroups"]), &[]);
+        if let Ok(mut res) = search.collect::<Result<Vec<LdapEntry>, LdapError>>() {
+            if let Some(entry) = res.pop() {
+                if let Ok(sids) = get_attr_sids(&[&entry], &base, "tokengroups") {
+                    groups.extend(sids.into_iter());
+                }
+            }
+        }
+        Ok(groups)
     }
 
     pub fn describe_delegation_rights(&self, delegation_rights: &DelegationRights) -> String {

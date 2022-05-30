@@ -356,6 +356,7 @@ fn main() {
                         .entry(location.clone())
                         .or_insert_with(|| {
                             AdelegResult {
+                                class_guid: res.class_guid.clone(),
                                 owner: None,
                                 dacl_protected: false,
                                 non_canonical_ace: None,
@@ -372,6 +373,7 @@ fn main() {
                         .entry(location.clone())
                         .or_insert_with(|| {
                             AdelegResult {
+                                class_guid: res.class_guid.clone(),
                                 owner: None,
                                 dacl_protected: false,
                                 non_canonical_ace: None,
@@ -391,6 +393,7 @@ fn main() {
                         .entry(location.clone())
                         .or_insert_with(|| {
                             AdelegResult {
+                                class_guid: res.class_guid.clone(),
                                 owner: None,
                                 dacl_protected: false,
                                 non_canonical_ace: None,

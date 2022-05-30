@@ -83,6 +83,22 @@ pub(crate) fn pwstr_to_str(ptr: *const u16) -> String {
     String::from_utf16_lossy(slice)
 }
 
+pub(crate) fn get_attr_sids<T: Borrow<LdapEntry>>(search_results: &[T], base: &str, attr_name: &str) -> Result<Vec<Sid>, LdapError> {
+    let attrs = if search_results.len() > 1 {
+        return Err(LdapError::RequiredObjectCollision { dn: base.to_owned() });
+    } else if search_results.len() == 0 {
+        return Err(LdapError::RequiredObjectMissing { dn: base.to_owned() });
+    } else {
+        &search_results[0].borrow().attrs
+    };
+
+    if let Some(vals) = attrs.get(attr_name) {
+        Ok(vals.iter().map(|s| Sid::from_bytes(s).unwrap()).collect())
+    } else {
+        Err(LdapError::RequiredAttributeMissing { dn: base.to_owned(), name: attr_name.to_owned() })
+    }
+}
+
 pub(crate) fn get_attr_sid<T: Borrow<LdapEntry>>(search_results: &[T], base: &str, attr_name: &str) -> Result<Sid, LdapError> {
     let attrs = if search_results.len() > 1 {
         return Err(LdapError::RequiredObjectCollision { dn: base.to_owned() });
