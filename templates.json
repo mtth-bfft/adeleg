@@ -16,57 +16,6 @@
         ]
     },
     {
-        "name": "Create direct child objects of any type in a container",
-        "description": "Create objects of any type in a container (but not in nested containers)",
-        "applies_to": {
-            "any_instance_of": ["organizationalUnit", "builtindomain", "domain"]
-        },
-        "rights": [
-            {
-                "access_mask": 1
-            }
-        ]
-    },
-    {
-        "name": "Allow setting blank passwords violating any password policy (also requires the right to change user account control properties)",
-        "description": "This right, when combined with the ability to change user account control flags, allows setting a flag on an account. Until that flag is unset, setting empty passwords for that account will be allowed",
-        "applies_to": {
-            "any_instance_of": ["organizationalUnit", "builtindomain", "domain", "user"]
-        },
-        "rights": [
-            {
-                "access_mask": 256,
-                "object_type": "Update Password Not Required Bit"
-            }
-        ]
-    },
-    {
-        "name": "Restore expired passwords and set passwords to never expire (also requires the right to change user account control properties)",
-        "description": "This right, when combined with the ability to change user account control flags, allows making an account password bypass any expiration policy",
-        "applies_to": {
-            "any_instance_of": ["organizationalUnit", "builtindomain", "domain", "user"]
-        },
-        "rights": [
-            {
-                "access_mask": 256,
-                "object_type": "Unexpire Password"
-            }
-        ]
-    },
-    {
-        "name": "Force user passwords to be stored reversibly encrypted (also requires the right to change user account control properties)",
-        "description": "This right, when combined with the ability to change user account control flags, allows setting a flag on accounts to store their password (and not something cryptographically derived from it) the next time they change it",
-        "applies_to": {
-            "any_instance_of": ["organizationalUnit", "builtindomain", "domain", "user"]
-        },
-        "rights": [
-            {
-                "access_mask": 256,
-                "object_type": "Enable Per User Reversibly Encrypted Password"
-            }
-        ]
-    },
-    {
         "name": "Create new security groups",
         "description": "Create security group objects. To fill them with members, you will also need to delegate the right to change their memberships.",
         "applies_to": {
@@ -150,41 +99,6 @@
         ]
     },
     {
-        "name": "Manage a computer or service account",
-        "description": "Set properties (e.g. name, surname, phone, email address).",
-        "applies_to": {
-            "any_instance_of": ["domain", "builtindomain", "organizationalUnit", "user"]
-        },
-        "rights": [
-            {
-                "allow": false,
-                "access_mask": 32,
-                "object_type": "altSecurityIdentities",
-                "container_inherit": true,
-                "object_inherit": true,
-                "inherit_only": true,
-                "inherited_object_type": "user"
-            },
-            {
-                "access_mask": 48,
-                "object_type": "Public Information",
-                "container_inherit": true,
-                "object_inherit": true,
-                "inherit_only": true,
-                "inherited_object_type": "user"
-            },
-            {
-                "access_mask": 48,
-                "object_type": "Personal Information",
-                "container_inherit": true,
-                "object_inherit": true,
-                "inherit_only": true,
-                "inherited_object_type": "user"
-            }
-        ]
-    },
-
-    {
         "name": "Reset user password without knowing their current one",
         "description": "This gives complete control over accounts, use with caution. You probably also want to delegate the right to force them to change password at next logon.",
         "applies_to": {
@@ -227,7 +141,7 @@
         ]
     },
     {
-        "name": "Add or remove oneself to group",
+        "name": "Add or remove oneself to a group",
         "description": "Grants a trustee the right to add themselves to the group(s) where this is delegated. This gives them \"control\" over the group, but they cannot add someone other than themselves.",
         "applies_to": {
             "any_instance_of": ["organizationalUnit", "group"]
@@ -243,7 +157,7 @@
         ]
     },
     {
-        "name": "Add or remove anyone to group",
+        "name": "Add or remove anyone to a group",
         "description": "Add and remove any user, computer, or service account to the group(s) where this is delegated. This gives \"control\" over the group.",
         "applies_to": {
             "any_instance_of": ["organizationalUnit", "group"]
@@ -300,162 +214,16 @@
         ]
     },
     {
-        "name": "Create inbound domain or forest trusts",
-        "description": "Make third-party domains or forests trust this domain",
-        "applies_to": {
-            "domain_dn": "CN=Builtin,DC=*"
-        },
-        "rights": [
-            {
-                "access_mask": 256,
-                "object_type": "Create Inbound Forest Trust"
-            }
-        ]
-    },
-    {
-        "name": "Add and modify user certificates declared for their communications, e.g. by email",
-        "description": "Manage certificates used by user accounts to communicate e.g. via email (this can allow intercepting communications, in some cases)",
-        "applies_to": {
-            "domain_dn": "CN=AdminSDHolder,CN=System,DC=*"
-        },
-        "rights": [
-            {
-                "access_mask": 48,
-                "object_type": "userCertificate"
-            }
-        ]
-    },
-    {
-        "name": "Fully control a container and all objects within it",
-        "description": "Manage and completely control a container and its contents (this allows takeover of user, computer, and service accounts)",
+        "name": "Fully control all objects within a container",
+        "description": "Manage and completely control all objects under a container (this allows takeover of user, computer, and service accounts)",
         "applies_to": {
             "any_instance_of": ["domain", "builtindomain", "organizationalUnit", "container"]
         },
         "rights": [
             {
                 "access_mask": 983551,
-                "container_inherit": true
-            }
-        ]
-    },
-    {
-        "name": "Fully control an object",
-        "description": "Manage and completely control an object (if delegated on a user, computer, or service account, this allows complete takeover)",
-        "applies_to": {
-            "domain_dn": "FIXME"
-        },
-        "rights": [
-            {
-                "access_mask": 983551
-            }
-        ]
-    },
-    {
-        "name": "Read and write logon attributes used by Windows Hello for Business",
-        "description": "Read and write certificates used by accounts to authenticate (this allows takeover of user, computer, and service accounts)",
-        "applies_to": {
-            "any_instance_of": ["domain", "builtindomain", "organizationalUnit", "container"]
-        },
-        "rights": [
-            {
-                "access_mask": 48,
                 "container_inherit": true,
-                "object_type": "msDS-KeyCredentialLink"
-            }
-        ]
-    },
-    {
-        "name": "Read and write Terminal Server specific user attributes",
-        "description": "Read and write attributes used by Terminal Server internally. This is a built-in delegation which you should not have to use",
-        "applies_to": {
-            "domain_dn": "FIXME"
-        },
-        "rights": [
-            {
-                "access_mask": 48,
-                "object_type": "terminalServer"
-            },
-            {
-                "access_mask": 48,
-                "object_type": "Terminal Server License Server"
-            }
-        ]
-    },
-    {
-        "name": "Replicate as a read-only domain controller",
-        "description": "Replicate a filtered set of attributes. This is a built-in delegation which you should not have to use",
-        "applies_to": "global",
-        "rights": [
-            {
-                "access_mask": 256,
-                "object_type": "Replicating Directory Changes",
-                "fixed_location": {
-                    "default_security_descriptor": "domainDNS"
-                }
-            },
-            {
-                "access_mask": 256,
-                "object_type": "Replicating Directory Changes",
-                "fixed_location": {
-                    "default_security_descriptor": "samDomain"
-                }
-            },
-            {
-                "access_mask": 256,
-                "object_type": "Replicating Directory Changes",
-                "fixed_location": {
-                    "dn": "CN=Builtin,DC=*"
-                }
-            },
-            {
-                "access_mask": 256,
-                "object_type": "Replicating Directory Changes",
-                "fixed_location": {
-                    "dn": "CN=Configuration,DC=*"
-                }
-            },
-            {
-                "access_mask": 256,
-                "object_type": "Replicating Directory Changes",
-                "fixed_location": {
-                    "dn": "CN=Schema,CN=Configuration,DC=*"
-                }
-            },
-            {
-                "access_mask": 256,
-                "object_type": "Replicating Directory Changes All",
-                "fixed_location": {
-                    "dn": "CN=Schema,CN=Configuration,DC=*"
-                }
-            },
-            {
-                "access_mask": 256,
-                "object_type": "Replicating Directory Changes In Filtered Set",
-                "fixed_location": {
-                    "dn": "CN=Schema,CN=Configuration,DC=*"
-                }
-            },
-            {
-                "access_mask": 8,
-                "object_type": "msDS-Behavior-Version",
-                "container_inherit": true,
-                "inherit_only": true,
-                "inherited_object_type": "nTDSDSA",
-                "fixed_location": {
-                    "dn": "CN=Sites,CN=Configuration,DC=*"
-                }
-            }
-        ]
-    },
-    {
-        "name": "Manage remote access services and Internet authentication services",
-        "description": "Manage configuration of RAS and IAS services. This is a built-in delegation which you should not have to use",
-        "rights": [
-            {
-                "access_mask": 983487,
-                "fixed_location": {
-                    "dn": "CN=RAS and IAS Servers Access Check,CN=System,DC=*"
-                }
+                "inherit_only": true
             }
         ]
     },
@@ -476,102 +244,6 @@
                 "access_mask": 131261,
                 "fixed_location": {
                     "dn": "CN=SOM,CN=WMIPolicy,CN=System,DC=*"
-                }
-            }
-        ]
-    },
-    {
-        "name": "Create legacy WMI policy templates for GPOs (should not be used)",
-        "description": "These rights may have been required in the past in order to create GPOs with WMI filters. They are not required now.",
-        "rights": [
-            {
-                "access_mask": 131287,
-                "fixed_location": {
-                    "default_security_descriptor": "msWMI-SimplePolicyTemplate"
-                }
-            },
-            {
-                "access_mask": 131287,
-                "fixed_location": {
-                    "default_security_descriptor": "msWMI-MergeablePolicyTemplate"
-                }
-            },
-            {
-                "access_mask": 131287,
-                "fixed_location": {
-                    "default_security_descriptor": "msWMI-IntSetParam"
-                }
-            },
-            {
-                "access_mask": 131287,
-                "fixed_location": {
-                    "default_security_descriptor": "msWMI-RangeParam"
-                }
-            },
-            {
-                "access_mask": 131287,
-                "fixed_location": {
-                    "default_security_descriptor": "msWMI-UintSetParam"
-                }
-            },
-            {
-                "access_mask": 131287,
-                "fixed_location": {
-                    "default_security_descriptor": "msWMI-StringSetParam"
-                }
-            }
-        ]
-    },
-    {
-        "name": "Create legacy WMI filters for GPOs (should not be used)",
-        "description": "These rights may have been required in the past in order to create GPOs with WMI filters. They are not required now.",
-        "rights": [
-            {
-                "access_mask": 1,
-                "fixed_location": {
-                    "default_security_descriptor": "msWMI-PolicyType"
-                }
-            },
-            {
-                "access_mask": 1,
-                "fixed_location": {
-                    "default_security_descriptor": "msWMI-PolicyTemplate"
-                }
-            },
-            {
-                "access_mask": 1,
-                "fixed_location": {
-                    "default_security_descriptor": "msWMI-WMIGPO"
-                }
-            },
-            {
-                "access_mask": 1,
-                "fixed_location": {
-                    "default_security_descriptor": "msWMI-Som"
-                }
-            },
-            {
-                "access_mask": 1,
-                "fixed_location": {
-                    "dn": "CN=WMIGPO,CN=WMIPolicy,CN=System,DC=*"
-                }
-            },
-            {
-                "access_mask": 1,
-                "fixed_location": {
-                    "dn": "CN=PolicyTemplate,CN=WMIPolicy,CN=System,DC=*"
-                }
-            },
-            {
-                "access_mask": 1,
-                "fixed_location": {
-                    "dn": "CN=PolicyType,CN=WMIPolicy,CN=System,DC=*"
-                }
-            },
-            {
-                "access_mask": 131261,
-                "fixed_location": {
-                    "dn": "CN=WMIPolicy,CN=System,DC=*"
                 }
             }
         ]
