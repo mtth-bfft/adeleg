@@ -190,14 +190,14 @@ pub(crate) fn get_domains(conn: &LdapConnection) -> Result<Vec<Domain>, LdapErro
         let netbios_name = get_attr_str(&[partition], &partition.dn, "netbiosname")?;
 
         let mut search = LdapSearch::new(&conn, Some(&nc), LDAP_SCOPE_BASE, Some("(objectSid=*)"), Some(&["objectSid"]), &[]);
-        let entry = search.next().ok_or(LdapError::RequiredObjectMissing { dn: nc.clone() })??;
-        let sid = get_attr_sid(&[entry], &nc, "objectsid")?;
-
-        v.push(Domain {
-            distinguished_name: nc.to_owned(),
-            sid,
-            netbios_name,
-        });
+        if let Some(Ok(entry)) = search.next() {
+            let sid= get_attr_sid(&[entry], &nc, "objectsid")?;
+            v.push(Domain {
+                distinguished_name: nc.to_owned(),
+                sid,
+                netbios_name,
+            });
+        }
     }
     Ok(v)
 }
