@@ -38,7 +38,6 @@ You can start using this inventory right away, in two ways:
 
 ![View by trustee](docs/images/view_by_trustee.png)
 
-
 ## FAQ
 
 _How do I know if one result is important? Should I consider everything a problem?_ You should start reviewing delegations on your critical assets (domain controllers, domain admins, their admin workstations, servers with sensitive business data, etc.): are these delegations needed for a user or service to do their work? could they not work with fewer access rights, or on fewer objects?
@@ -46,6 +45,20 @@ _How do I know if one result is important? Should I consider everything a proble
 _My forest has years of delegations built up, how am I supposed to handle that many warnings?_ You may want to run the analysis periodically and only focus on differences, so that you can start from a baseline and clean up delegations little by little over time.
 
 _Can I import results from this tool into product <X>?_ Yes, if your tool knows how to parse CSV: `.\adeleg.exe --csv dump.csv`
+
+## How does it work?
+
+This tool enumerates security descriptors of all objects, then filters out "expected" ACEs:
+
+- Inherited ACEs, since we are only interested in the original ACE upper in the tree;
+- ACEs in the `defaultSecurityDescriptor` of the object class in the schema;
+- Some special cases which need to be handled manually.
+
+Special cases currently include:
+- object owners under a container with a `CREATE_CHILD` delegation
+- ACEs for `CREATOR_OWNER` which are replaced and split in two in some cases during inheritance
+- AdminSDHolder ACEs, for principals with `adminCount` set to 1
+- KDS Root Keys, RODCs, ADCS, ADFS, Exchange, etc. are work in progress
 
 ## Copyright
 
