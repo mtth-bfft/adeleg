@@ -9,7 +9,7 @@ repository = "https://github.com/mtth-bfft/adeleg"
 [dependencies]
 authz = { path = "../authz", features = ["serial"] }
 winldap = { path = "../winldap" }
-clap = "3.0.13"
+clap = "4.0.9"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.79"
 native-windows-gui = "1.0.12"
