@@ -58,12 +58,12 @@ pub(crate) fn read_password(out: &mut String, prompt: &str) {
 
 pub(crate) fn get_gc_domain_controller() -> Option<(String, u16)> {
     let mut dc_info_ptr: *mut DOMAIN_CONTROLLER_INFOW = null_mut();
-    let res = unsafe { DsGetDcNameW(None, None, null_mut(), None, DS_GC_SERVER_REQUIRED | DS_DIRECTORY_SERVICE_REQUIRED | DS_RETURN_DNS_NAME, &mut dc_info_ptr as *mut _) };
+    let res = unsafe { DsGetDcNameW(None, None, None, None, DS_GC_SERVER_REQUIRED | DS_DIRECTORY_SERVICE_REQUIRED | DS_RETURN_DNS_NAME, &mut dc_info_ptr as *mut _) };
     if res != ERROR_SUCCESS.0 || dc_info_ptr.is_null() {
         return None;
     }
     let server = unsafe { pwstr_to_str((*dc_info_ptr).DomainControllerName.0) };
-    unsafe { NetApiBufferFree(dc_info_ptr as *mut _); }
+    unsafe { NetApiBufferFree(Some(dc_info_ptr as *mut _)); }
     let server = server.trim_start_matches('\\');
     Some(if let Some((host, port)) = server.split_once(':') {
         (host.to_owned(), port.parse().unwrap_or(389))

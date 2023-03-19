@@ -17,16 +17,13 @@ native-windows-derive = "1.0.3"
 csv = "1.1.6"
 
 [dependencies.windows]
-version = "0.32.0"
+version = "0.46.0"
 features = [
-    "alloc",
     "Win32_Security",
-    "Win32_Security_Authorization",
     "Win32_Networking_ActiveDirectory",
+    "Win32_Networking_Ldap",
     "Win32_NetworkManagement_NetManagement",
-    "Win32_System_SystemServices",
     "Win32_System_LibraryLoader",
-    "Win32_System_Memory",
     "Win32_System_Console",
     "Win32_Foundation",
 ]

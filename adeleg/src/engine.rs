@@ -2,13 +2,13 @@ use core::fmt::Display;
 use core::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use windows::Win32::Networking::ActiveDirectory::{ADS_RIGHT_WRITE_DAC, ADS_RIGHT_READ_CONTROL, ADS_RIGHT_DS_LIST_OBJECT, ADS_RIGHT_ACCESS_SYSTEM_SECURITY, ADS_RIGHT_DELETE, ADS_RIGHT_DS_WRITE_PROP, ADS_RIGHT_DS_CREATE_CHILD, ADS_RIGHT_DS_DELETE_CHILD, ADS_RIGHT_DS_CONTROL_ACCESS, ADS_RIGHT_DS_SELF, ADS_RIGHT_DS_DELETE_TREE, ADS_RIGHT_ACTRL_DS_LIST, ADS_RIGHT_DS_READ_PROP, ADS_RIGHT_WRITE_OWNER};
-use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION, SidTypeUser, SidTypeGroup, SidTypeComputer, OBJECT_INHERIT_ACE};
+use windows::Win32::Security::{SE_DACL_PROTECTED, OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION, SidTypeUser, SidTypeGroup, SidTypeComputer, OBJECT_INHERIT_ACE};
 use windows::Win32::Networking::Ldap::{LDAP_SCOPE_BASE, LDAP_SCOPE_SUBTREE, LDAP_SERVER_SD_FLAGS_OID};
 use windows::Win32::Security::SID_NAME_USE;
-use windows::Win32::Foundation::{PSID, PSTR, PWSTR, BOOL};
+use windows::core::{PWSTR, PCSTR};
+use windows::Win32::Foundation::{PSID, BOOL};
 use authz::{SecurityDescriptor, Sid, Ace, Acl};
 use windows::Win32::System::LibraryLoader::{LoadLibraryA, GetProcAddress};
-use windows::Win32::System::SystemServices::SE_DACL_PROTECTED;
 use winldap::connection::LdapConnection;
 use winldap::utils::{get_attr_strs, get_attr_str};
 use winldap::search::{LdapSearch, LdapEntry};
@@ -186,11 +186,17 @@ impl<'a> Engine<'a> {
             ignored_trustee_sids.insert(domain.sid.with_rid(519));   // Enterprise Admins
         }
 
-        let h_sechost = unsafe { LoadLibraryA(PSTR(b"sechost.dll\x00".as_ptr())) };
+        let h_sechost = match unsafe { LoadLibraryA(PCSTR(b"sechost.dll\x00".as_ptr())) } {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("Unable to load required library sechost.dll: {}", e);
+                std::process::exit(1);
+            }
+        };
         let p_lookupaccountsidlocal: Option<unsafe extern "system" fn(PSID, PWSTR, *mut u32, PWSTR, *mut u32, *mut SID_NAME_USE) -> BOOL> = if h_sechost.is_invalid() {
             None
         } else {
-            unsafe { GetProcAddress(h_sechost, PSTR(b"LookupAccountSidLocalW\x00".as_ptr())).map(|f| core::mem::transmute(f)) }
+            unsafe { GetProcAddress(h_sechost, PCSTR(b"LookupAccountSidLocalW\x00".as_ptr())).map(|f| core::mem::transmute(f)) }
         };
 
         Self {
@@ -276,7 +282,7 @@ impl<'a> Engine<'a> {
                         continue;
                     },
                 };
-                let dacl_protected = (sd.controls as u32 & SE_DACL_PROTECTED) != 0 &&
+                let dacl_protected = (sd.controls & SE_DACL_PROTECTED.0) != 0 &&
                     !IGNORED_BLOCK_DACL_CLASSES.contains(&class_name.to_ascii_lowercase().as_str());
                 let dacl = match sd.dacl {
                     Some(acl) => acl,
@@ -310,9 +316,11 @@ impl<'a> Engine<'a> {
             .distinguished_name;
         let dn = format!("CN=AdminSDHolder,CN=System,{}", nc_holding_object);
         let mut sd_control_val = BerVal::new();
+        // This is safe (the string is defined in the MS headers)
+        let sd_flags_oid = unsafe { LDAP_SERVER_SD_FLAGS_OID.to_string() }.unwrap();
         sd_control_val.append(BerEncodable::Sequence(vec![BerEncodable::Integer((DACL_SECURITY_INFORMATION.0).into())]));
-            let sd_control = LdapControl::new(
-            LDAP_SERVER_SD_FLAGS_OID,
+        let sd_control = LdapControl::new(
+            &sd_flags_oid,
             &sd_control_val,
             true)?;
         let search = LdapSearch::new(self.ldap, Some(&dn),LDAP_SCOPE_BASE,
@@ -328,8 +336,10 @@ impl<'a> Engine<'a> {
     
         let mut sd_control_val = BerVal::new();
         sd_control_val.append(BerEncodable::Sequence(vec![BerEncodable::Integer((OWNER_SECURITY_INFORMATION.0 | DACL_SECURITY_INFORMATION.0).into())]));
+        // This is safe (the string is defined in the MS headers)
+        let sd_flags_oid = unsafe { LDAP_SERVER_SD_FLAGS_OID.to_string() }.unwrap();
         let sd_control = LdapControl::new(
-            LDAP_SERVER_SD_FLAGS_OID,
+            &sd_flags_oid,
             &sd_control_val,
             true)?;
         let search = LdapSearch::new(self.ldap, Some(naming_context), LDAP_SCOPE_SUBTREE,
@@ -379,7 +389,7 @@ impl<'a> Engine<'a> {
             };
             let admincount = get_attr_str(&[&entry], &entry.dn, "admincount")
                 .unwrap_or("0".to_owned()) != "0";
-            let dacl_protected = ((sd.controls as u32 & SE_DACL_PROTECTED) != 0) &&
+            let dacl_protected = ((sd.controls & SE_DACL_PROTECTED.0) != 0) &&
                 !default_dacl_protected &&
                 !admincount &&
                 !IGNORED_BLOCK_DACL_CLASSES.contains(&most_specific_class.as_str()) &&
@@ -1082,7 +1092,7 @@ impl<'a> Engine<'a> {
 
             // LookupAccountSidLocalW from sechost.dll is not in windows-rs (yet)
             let succeeded = unsafe {
-                p_lookupaccountsidlocal(PSID(sid.as_bytes().as_ptr() as isize), PWSTR(user_name.as_mut_ptr()), &mut user_name_len as *mut _, PWSTR(domain_name.as_mut_ptr()), &mut domain_name_len as *mut _, &mut siduse as *mut _)
+                p_lookupaccountsidlocal(PSID(sid.as_bytes().as_ptr() as *mut _), PWSTR(user_name.as_mut_ptr()), &mut user_name_len as *mut _, PWSTR(domain_name.as_mut_ptr()), &mut domain_name_len as *mut _, &mut siduse as *mut _)
             };
             if succeeded.as_bool() {
                 user_name.truncate(user_name_len as usize);
