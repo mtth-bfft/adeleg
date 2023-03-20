@@ -1,4 +1,4 @@
-use windows::Win32::Networking::Ldap::{ber_alloc_t, LBER_USE_DER, LDAP_BERVAL, ber_flatten, ber_free, ber_bvfree, berelement};
+use windows::Win32::Networking::Ldap::{ber_alloc_t, LBER_USE_DER, LDAP_BERVAL, ber_flatten, ber_free, ber_bvfree, BerElement};
 
 use crate::error::LdapError;
 use std::ptr::null_mut;
@@ -8,7 +8,7 @@ use std::collections::HashSet;
 // See github.com/microsoft/windows-rs/issues
 #[link(name = "Wldap32")]
 extern "C" {
-    fn ber_printf(pberelement: *mut berelement, fmt: *const u8, ...) -> i32;
+    fn ber_printf(pberelement: *mut BerElement, fmt: *const u8, ...) -> i32;
 }
 
 #[derive(Debug, Clone)]
@@ -21,7 +21,7 @@ pub enum BerEncodable {
 }
 
 impl BerEncodable {
-    unsafe fn printf(&self, ber_element: *mut berelement) -> i32 {
+    unsafe fn printf(&self, ber_element: *mut BerElement) -> i32 {
         match self {
             BerEncodable::Integer(i) => {
                 let fmt = CString::new("i").unwrap();

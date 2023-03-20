@@ -1,5 +1,4 @@
-use core::fmt::Display;
-use windows::core::alloc::fmt::Formatter;
+use core::fmt::{Display, Formatter};
 use crate::utils::get_ldap_errmsg;
 
 #[derive(Debug, Clone)]

@@ -1,8 +1,9 @@
 use crate::connection::LdapConnection;
 use crate::error::LdapError;
-use windows::Win32::Networking::Ldap::{LDAP_SUCCESS, LDAPMessage, ldap_first_entry, ldap_next_entry, ldap_memfree, ldap_get_dnW, ldap_msgfree, ldap_first_attributeW, ldap_get_values_lenW, ldap_next_attributeW, ldap_search_ext_sW, ldapcontrolW, LDAP_BERVAL, ldap_create_page_controlW, ldap_control_freeW, ldap_parse_resultW, ldap_parse_page_controlW, ber_bvfree, ldap_controls_freeW, LDAP_CONTROL_NOT_FOUND};
-use windows::Win32::Foundation::{PSTR, PWSTR, BOOLEAN};
-use std::ptr::{null_mut, null};
+use windows::Win32::Networking::Ldap::{LDAPControlW, LDAP_SUCCESS, LDAPMessage, ldap_first_entry, ldap_next_entry, ldap_memfree, ldap_get_dnW, ldap_msgfree, ldap_first_attributeW, ldap_get_values_lenW, ldap_next_attributeW, ldap_search_ext_sW, LDAP_BERVAL, ldap_create_page_controlW, ldap_control_freeW, ldap_parse_resultW, ldap_parse_page_controlW, ber_bvfree, ldap_controls_freeW, LDAP_CONTROL_NOT_FOUND};
+use core::ptr::{null_mut, null};
+use windows::Win32::Foundation::BOOLEAN;
+use windows::core::{PCSTR, PSTR, PWSTR, PCWSTR};
 use std::collections::HashMap;
 use crate::utils::{pwstr_to_str, str_to_wstr};
 use crate::control::LdapControl;
@@ -50,7 +51,7 @@ impl<'a> LdapSearch<'a> {
             attr_names_ptrs: None,
             server_controls: server_controls.iter().map(|c| (*c).to_owned()).collect(),
             page_cookie: vec![],
-            result_page: null_mut(),
+            result_page: null_mut() as *mut _,
             cursor_entry: null_mut(),
             failed: false,
         };
@@ -99,9 +100,9 @@ impl<'a> Iterator for LdapSearch<'a> {
                 let attr_names: *const *const u16  = self.attr_names_ptrs.as_ref().map(|v| v.as_ptr()).unwrap_or(null());
 
                 // Prepare server control array of pointers (at the last moment because of paging, which changes every time)
-                let mut server_controls: Vec<ldapcontrolW> = Vec::new();
+                let mut server_controls: Vec<LDAPControlW> = Vec::new();
                 for control in &self.server_controls {
-                    server_controls.push(ldapcontrolW {
+                    server_controls.push(LDAPControlW {
                         ldctl_oid: PWSTR(control.oid.as_ptr() as *mut _),
                         ldctl_value: LDAP_BERVAL {
                             bv_len: control.value.len() as u32,
@@ -110,10 +111,10 @@ impl<'a> Iterator for LdapSearch<'a> {
                         ldctl_iscritical: BOOLEAN(if control.critical { 1 } else { 0 })
                     });
                 }
-                let mut page_control: *mut ldapcontrolW = null_mut();
+                let mut page_control: *mut LDAPControlW = null_mut();
                 let page_cookie = LDAP_BERVAL {
                     bv_len: self.page_cookie.len() as u32,
-                    bv_val: PSTR(self.page_cookie.as_ptr()),
+                    bv_val: PSTR(self.page_cookie.as_ptr() as *mut _),
                 };
                 let res = unsafe { ldap_create_page_controlW(self.connection.handle, 999, if self.page_cookie.is_empty() { null_mut() } else { &page_cookie as *const _ as *mut _ }, 1, &mut page_control as *mut _) };
                 if res != (LDAP_SUCCESS.0 as u32) {
@@ -122,19 +123,29 @@ impl<'a> Iterator for LdapSearch<'a> {
                         code: res,
                     }));
                 }
-                let server_controls_ptrs: Vec<*const ldapcontrolW> = server_controls.iter()
-                    .map(|c| c as *const ldapcontrolW)
-                    .chain(std::iter::once(page_control as *const ldapcontrolW))
+                let server_controls_ptrs: Vec<*const LDAPControlW> = server_controls.iter()
+                    .map(|c| c as *const LDAPControlW)
+                    .chain(std::iter::once(page_control as *const LDAPControlW))
                     .chain(std::iter::once(null()))
                     .collect();
-                let server_controls: *const *const ldapcontrolW = server_controls_ptrs.as_ptr();
+                let server_controls: *const *const LDAPControlW = server_controls_ptrs.as_ptr();
 
                 let res = unsafe {
                     match (&self.base, &self.filter) {
-                        (Some(base), Some(filter)) => ldap_search_ext_sW(self.connection.handle, base.as_str(), self.scope, filter.as_str(), attr_names, 0, server_controls, null_mut(), null_mut(), 0, &mut self.result_page as *mut *mut LDAPMessage),
-                        (Some(base), None) => ldap_search_ext_sW(self.connection.handle, base.as_str(), self.scope, None, attr_names, 0, server_controls, null_mut(), null_mut(), 0, &mut self.result_page as *mut *mut LDAPMessage),
-                        (None, Some(filter)) => ldap_search_ext_sW(self.connection.handle, None, self.scope, filter.as_str(), attr_names, 0, server_controls, null_mut(), null_mut(), 0,&mut self.result_page as *mut *mut LDAPMessage),
-                        (None, None) => ldap_search_ext_sW(self.connection.handle, None, self.scope, None, attr_names, 0, server_controls, null_mut(), null_mut(), 0, &mut self.result_page as *mut *mut LDAPMessage),
+                        (Some(base), Some(filter)) => {
+                            let base_u16: Vec<u16> = base.encode_utf16().chain(std::iter::once(0)).collect();
+                            let filter_u16: Vec<u16> = filter.encode_utf16().chain(std::iter::once(0)).collect();
+                            ldap_search_ext_sW(self.connection.handle, PCWSTR(base_u16.as_ptr()), self.scope, PCWSTR(filter_u16.as_ptr()), attr_names, 0, Some(server_controls), None, null_mut(), 0, &mut self.result_page as *mut *mut LDAPMessage)
+                        },
+                        (Some(base), None) => {
+                            let base_u16: Vec<u16> = base.encode_utf16().chain(std::iter::once(0)).collect();
+                            ldap_search_ext_sW(self.connection.handle, PCWSTR(base_u16.as_ptr()), self.scope, None, attr_names, 0, Some(server_controls), None, null_mut(), 0, &mut self.result_page as *mut *mut LDAPMessage)
+                        },
+                        (None, Some(filter)) => {
+                            let filter_u16: Vec<u16> = filter.encode_utf16().chain(std::iter::once(0)).collect();
+                            ldap_search_ext_sW(self.connection.handle, None, self.scope, PCWSTR(filter_u16.as_ptr()), attr_names, 0, Some(server_controls), None, null_mut(), 0,&mut self.result_page as *mut *mut LDAPMessage)
+                        },
+                        (None, None) => ldap_search_ext_sW(self.connection.handle, None, self.scope, None, attr_names, 0, Some(server_controls), None, null_mut(), 0, &mut self.result_page as *mut *mut LDAPMessage),
                     }
                 };
                 if !page_control.is_null() {
@@ -157,8 +168,8 @@ impl<'a> Iterator for LdapSearch<'a> {
                 }
                 // We did get a result, parse the paging cookie from the controls in the response,
                 // so that the next query starts back from there
-                let mut response_controls: *mut *mut ldapcontrolW = null_mut();
-                let res = unsafe { ldap_parse_resultW(self.connection.handle, self.result_page, null_mut(), null_mut(), null_mut(), null_mut(), &mut response_controls as *mut _, BOOLEAN(0)) };
+                let mut response_controls: *mut *mut LDAPControlW = null_mut();
+                let res = unsafe { ldap_parse_resultW(self.connection.handle, self.result_page, null_mut(), None, None, None, &mut response_controls as *mut _, BOOLEAN(0)) };
                 if res != (LDAP_SUCCESS.0 as u32) {
                     self.failed = true;
                     return Some(Err(LdapError::ParseResultFailed {
@@ -210,7 +221,7 @@ impl<'a> Iterator for LdapSearch<'a> {
                 return Some(Err(LdapError::GetDNFailed { code: self.connection.get_errcode() }));
             }
             let dn = pwstr_to_str(ptr.0);
-            ldap_memfree(PSTR(ptr.0 as *mut u8));
+            ldap_memfree(PCSTR(ptr.0 as *const _));
             dn
         };
         // Then get all its attributes
@@ -221,8 +232,7 @@ impl<'a> Iterator for LdapSearch<'a> {
             // Make attribute names lowercase, so that lookups can be performed quickly using hashmaps
             let name = pwstr_to_str(attr_name.0).to_lowercase();
             let mut values = Vec::new();
-
-            let values_raw = unsafe { ldap_get_values_lenW(self.connection.handle, self.cursor_entry, attr_name) };
+            let values_raw = unsafe { ldap_get_values_lenW(self.connection.handle, self.cursor_entry, PCWSTR(attr_name.0)) };
             if values_raw.is_null() {
                 // ldap_get_values_lenW can return NULL if there is no value, or if an error
                 // occured: we need to check the error flag in the connection
@@ -253,8 +263,11 @@ impl<'a> Iterator for LdapSearch<'a> {
                 }));
             }
             attrs.insert(name, values);
+            //FIXME: ldap_memfree(attr_name)
             attr_name = unsafe { ldap_next_attributeW(self.connection.handle, self.cursor_entry, cursor_attr) };
         }
+        // FIXME: ber_free(cursor_attr, 0) here, and refactor return()s in the while() above
+
         // ldap_first_attributeW and ldap_next_attributeW can return NULL both to
         // mean "no more entry" or that an error occured. We need to check the error flag in the
         // connection.

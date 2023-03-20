@@ -1,7 +1,7 @@
-use core::ptr::null_mut;
+use core::ptr::null;
 use crate::error::LdapError;
-use windows::Win32::Foundation::PWSTR;
-use windows::Win32::Networking::Ldap::{ldap_initW, ldap_unbind, ldap_connect, LDAP_OPT_REFERRALS, LDAP_TIMEVAL, LDAP_SUCCESS, ldap_bind_sW, ldap, LDAP_SCOPE_BASE, ldap_set_option};
+use windows::core::PCWSTR;
+use windows::Win32::Networking::Ldap::{LDAP, ldap_initW, ldap_unbind, ldap_connect, LDAP_OPT_REFERRALS, LDAP_TIMEVAL, LDAP_SUCCESS, ldap_bind_sW, LDAP_SCOPE_BASE, ldap_set_option};
 use windows::Win32::System::Rpc::{SEC_WINNT_AUTH_IDENTITY_W, SEC_WINNT_AUTH_IDENTITY_UNICODE};
 use crate::utils::{get_ldap_errcode, str_to_wstr, get_attr_str, get_attr_strs};
 use crate::search::{LdapSearch, LdapEntry};
@@ -12,7 +12,7 @@ const LDAP_AUTH_NEGOTIATE: u32 = 1158;
 
 #[derive(Debug)]
 pub struct LdapConnection {
-    pub(crate) handle: *mut ldap,
+    pub(crate) handle: *mut LDAP,
     pub(crate) supported_controls: HashSet<String>,
     pub(crate) naming_contexts: Vec<String>,
     pub(crate) root_domain_naming_context: String,
@@ -24,7 +24,8 @@ unsafe impl Send for LdapConnection { }
 
 impl LdapConnection {
     pub fn new(server: &str, port: u16, credentials: Option<(&str, &str, &str)>) -> Result<Self, LdapError> {
-        let handle = unsafe { ldap_initW(server, port as u32) };
+        let server_u16: Vec<u16> = server.encode_utf16().chain(std::iter::once(0)).collect();
+        let handle = unsafe { ldap_initW(PCWSTR(server_u16.as_ptr()), port as u32) };
         if handle.is_null() {
             return Err(LdapError::ConnectionFailed(get_ldap_errcode()));
         }
@@ -69,9 +70,9 @@ impl LdapConnection {
             None
         };
         let creds_ptr = if let Some(c) = &creds {
-            PWSTR(c as *const _ as *mut _)
+            PCWSTR(c as *const _ as *const _)
         } else {
-            PWSTR(null_mut())
+            PCWSTR(null())
         };
 
         let res = unsafe { ldap_bind_sW(handle, None, creds_ptr, LDAP_AUTH_NEGOTIATE) };
