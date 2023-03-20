@@ -1,17 +1,17 @@
-use core::fmt::Debug;
+use core::fmt::{Debug, Display, Formatter};
 use std::convert::TryFrom;
+use windows::Win32::Foundation::HLOCAL;
 use windows::Win32::Security::EqualPrefixSid;
 use windows::Win32::Security::GetSidIdentifierAuthority;
 use windows::Win32::Security::GetSidSubAuthority;
 use windows::Win32::Security::GetSidSubAuthorityCount;
 use core::ptr::null_mut;
-use core::fmt::Display;
 use crate::error::AuthzError;
 use windows::Win32::Security::{IsValidSid, GetLengthSid};
 use windows::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
-use windows::Win32::Foundation::{PSID, PWSTR};
+use windows::Win32::Foundation::{PSID};
+use windows::core::{PWSTR, PCWSTR};
 use windows::Win32::System::Memory::LocalFree;
-use windows::core::alloc::fmt::Formatter;
 use crate::utils::{pwstr_to_str, get_last_error};
 
 #[derive(Clone, Eq, PartialEq, Hash)]
@@ -21,12 +21,12 @@ pub struct Sid {
 
 impl Sid {
     pub fn from_bytes(slice: &[u8]) -> Result<Self, AuthzError> {
-        let is_valid = unsafe { IsValidSid(PSID(slice.as_ptr() as isize)) };
+        let is_valid = unsafe { IsValidSid(PSID(slice.as_ptr() as *mut _)) };
         if !is_valid.as_bool() {
             return Err(AuthzError::InvalidSidBytes(slice.to_vec()));
         }
 
-        let expected_size = unsafe { GetLengthSid(PSID(slice.as_ptr() as isize)) } as usize;
+        let expected_size = unsafe { GetLengthSid(PSID(slice.as_ptr() as *mut _)) } as usize;
         if expected_size != slice.len() {
             return Err(AuthzError::UnexpectedSidSize { bytes: slice.to_vec(), expected_size });
         }
@@ -56,28 +56,28 @@ impl Sid {
 
     pub fn get_rid(&self) -> u32 {
         unsafe {
-            let sub_auth_count =  *(GetSidSubAuthorityCount(PSID(self.bytes.as_ptr() as isize)));
-            *(GetSidSubAuthority(PSID(self.bytes.as_ptr() as isize), (sub_auth_count - 1).into()))
+            let sub_auth_count =  *(GetSidSubAuthorityCount(PSID(self.bytes.as_ptr() as *mut _)));
+            *(GetSidSubAuthority(PSID(self.bytes.as_ptr() as *mut _), (sub_auth_count - 1).into()))
         }
     }
 
     pub fn shares_prefix_with(&self, other: &Sid) -> bool {
         unsafe {
-            EqualPrefixSid(PSID(self.as_bytes().as_ptr() as isize), PSID(other.as_bytes().as_ptr() as isize))
+            EqualPrefixSid(PSID(self.as_bytes().as_ptr() as *mut _), PSID(other.as_bytes().as_ptr() as *mut _))
         }.as_bool()
     }
 
     // Returns true if and only if the SID starts with S-1-5-21-X-Y-Z
     pub fn is_domain_specific(&self) -> bool {
         unsafe {
-            let sub_auth_count =  *(GetSidSubAuthorityCount(PSID(self.bytes.as_ptr() as isize)));
+            let sub_auth_count =  *(GetSidSubAuthorityCount(PSID(self.bytes.as_ptr() as *mut _)));
             if sub_auth_count < 4 {
                 return false;
             }
-            if (*GetSidIdentifierAuthority(PSID(self.bytes.as_ptr() as isize))).Value != [0, 0, 0, 0, 0, 5] { // SECURITY_NT_AUTHORITY
+            if (*GetSidIdentifierAuthority(PSID(self.bytes.as_ptr() as *mut _))).Value != [0, 0, 0, 0, 0, 5] { // SECURITY_NT_AUTHORITY
                 return false;
             }
-            if *(GetSidSubAuthority(PSID(self.bytes.as_ptr() as isize), 0)) != 21 {
+            if *(GetSidSubAuthority(PSID(self.bytes.as_ptr() as *mut _), 0)) != 21 {
                 return false;
             }
         }
@@ -97,14 +97,20 @@ impl Sid {
 impl TryFrom<&str> for Sid {
     type Error = AuthzError;
 
-    fn try_from(s: &str) -> Result<Self, Self::Error> {
-        let mut psid = PSID(0);
-        let succeeded = unsafe { ConvertStringSidToSidW(s, &mut psid as *mut _) };
+    fn try_from(sid: &str) -> Result<Self, Self::Error> {
+        let mut psid = PSID(null_mut());
+        let sid_u16: Vec<u16> = sid.encode_utf16().chain(std::iter::once(0)).collect();
+        let stringsid = PCWSTR(sid_u16.as_ptr());
+        let succeeded = unsafe { ConvertStringSidToSidW(stringsid, &mut psid) };
         if !succeeded.as_bool() {
-            return Err(AuthzError::InvalidSidString { code: get_last_error(), str: s.to_owned() });
+            return Err(AuthzError::InvalidSidString { code: get_last_error(), str: sid.to_owned() });
         }
         let res = unsafe { Self::from_ptr(psid) };
-        unsafe { LocalFree(psid.0); }
+        if let Err(e) = unsafe { LocalFree(HLOCAL(psid.0 as isize)) } {
+            if e.code().is_err() {
+                panic!("Invalid call to LocalFree()");
+            }
+        }
         res
     }
 }
@@ -113,10 +119,14 @@ impl Display for Sid {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         unsafe {
             let mut str = PWSTR(null_mut());
-            let succeeded = ConvertSidToStringSidW(PSID(self.bytes.as_ptr() as isize), &mut str);
+            let succeeded = ConvertSidToStringSidW(PSID(self.bytes.as_ptr() as *mut _), &mut str);
             if succeeded.as_bool() {
                 let res = pwstr_to_str(str.0);
-                LocalFree(str.0 as isize);
+                if let Err(e) = LocalFree(HLOCAL(str.0 as isize)) {
+                    if e.code().is_err() {
+                        panic!("Invalid call to LocalFree()");
+                    }
+                }
                 f.write_str(&res)
             } else {
                 write!(f, "SID={:?}", self)

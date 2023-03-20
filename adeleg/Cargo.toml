@@ -10,10 +10,10 @@ repository = "https://github.com/mtth-bfft/adeleg"
 authz = { path = "../authz", features = ["serial"] }
 winldap = { path = "../winldap" }
 clap = { version = "4.1.11", features = ["derive"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0.79"
-native-windows-gui = "1.0.12"
-native-windows-derive = "1.0.3"
+serde = { version = "1.0.157", features = ["derive"] }
+serde_json = "1.0.94"
+native-windows-gui = "1.0.13"
+native-windows-derive = "1.0.5"
 csv = "1.1.6"
 
 [dependencies.windows]

@@ -67,22 +67,22 @@ impl Ace {
         // is actually a good thing since this possibility is explicitly allowed by specifications.
         let (trustee, access_mask, type_specific) = if acetype == ACCESS_ALLOWED_ACE_TYPE {
             let ace = slice.as_ptr() as *const ACCESS_ALLOWED_ACE;
-            let sid = unsafe { Sid::from_ptr(PSID(&(*ace).SidStart as *const _ as isize))? };
+            let sid = unsafe { Sid::from_ptr(PSID(&(*ace).SidStart as *const _ as *mut _))? };
             (sid, unsafe { (*ace).Mask }, AceType::AccessAllowed)
         } else if acetype == ACCESS_ALLOWED_OBJECT_ACE_TYPE {
             let ace = slice.as_ptr() as *const ACCESS_ALLOWED_OBJECT_ACE;
             let (object_type, inherited_object_type, sid) = unsafe {
                 if ((*ace).Flags.0 & ACE_OBJECT_TYPE_PRESENT.0) != 0 && ((*ace).Flags.0 & ACE_INHERITED_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (Some(Guid::from((*ace).ObjectType)), Some(Guid::from((*ace).InheritedObjectType)), &(*ace).SidStart as *const _ as isize)
+                    (Some(Guid::from((*ace).ObjectType)), Some(Guid::from((*ace).InheritedObjectType)), &(*ace).SidStart as *const _)
                 } else if ((*ace).Flags.0 & ACE_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (Some(Guid::from((*ace).ObjectType)), None, &(*ace).InheritedObjectType as *const _ as isize)
+                    (Some(Guid::from((*ace).ObjectType)), None, &(*ace).InheritedObjectType as *const _ as *const _)
                 } else if ((*ace).Flags.0 & ACE_INHERITED_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (None, Some(Guid::from((*ace).ObjectType)), &(*ace).InheritedObjectType as *const _ as isize)
+                    (None, Some(Guid::from((*ace).ObjectType)), &(*ace).InheritedObjectType as *const _ as *const _)
                 } else {
-                    (None, None, &(*ace).ObjectType as *const _ as isize)
+                    (None, None, &(*ace).ObjectType as *const _ as *const _)
                 }
             };
-            let sid = unsafe { Sid::from_ptr(PSID(sid))? };
+            let sid = unsafe { Sid::from_ptr(PSID(sid as *mut _))? };
             (sid, unsafe { (*ace).Mask }, AceType::AccessAllowedObject {
                 flags: unsafe { (*ace).Flags.0 },
                 object_type,
@@ -90,22 +90,22 @@ impl Ace {
             })
         } else if acetype == ACCESS_ALLOWED_CALLBACK_ACE_TYPE {
             let ace = slice.as_ptr() as *const ACCESS_ALLOWED_CALLBACK_ACE;
-            let sid = unsafe { Sid::from_ptr(PSID(&(*ace).SidStart as *const _ as isize))? };
+            let sid = unsafe { Sid::from_ptr(PSID(&(*ace).SidStart as *const _ as *mut _))? };
             (sid, unsafe { (*ace).Mask }, AceType::AccessAllowedCallback)
         } else if acetype == ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE {
             let ace = slice.as_ptr() as *const ACCESS_ALLOWED_CALLBACK_OBJECT_ACE;
             let (object_type, inherited_object_type, sid) = unsafe {
                 if ((*ace).Flags.0 & ACE_OBJECT_TYPE_PRESENT.0) != 0 && ((*ace).Flags.0 & ACE_INHERITED_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (Some(Guid::from((*ace).ObjectType)), Some(Guid::from((*ace).InheritedObjectType)), &(*ace).SidStart as *const _ as isize)
+                    (Some(Guid::from((*ace).ObjectType)), Some(Guid::from((*ace).InheritedObjectType)), &(*ace).SidStart as *const _)
                 } else if ((*ace).Flags.0 & ACE_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (Some(Guid::from((*ace).ObjectType)), None, &(*ace).InheritedObjectType as *const _ as isize)
+                    (Some(Guid::from((*ace).ObjectType)), None, &(*ace).InheritedObjectType as *const _ as *const _)
                 } else if ((*ace).Flags.0 & ACE_INHERITED_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (None, Some(Guid::from((*ace).ObjectType)), &(*ace).InheritedObjectType as *const _ as isize)
+                    (None, Some(Guid::from((*ace).ObjectType)), &(*ace).InheritedObjectType as *const _ as *const _)
                 } else {
-                    (None, None, &(*ace).ObjectType as *const _ as isize)
+                    (None, None, &(*ace).ObjectType as *const _ as *const _)
                 }
             };
-            let sid = unsafe { Sid::from_ptr(PSID(sid))? };
+            let sid = unsafe { Sid::from_ptr(PSID(sid as *mut _))? };
             (sid, unsafe { (*ace).Mask }, AceType::AccessAllowedCallbackObject {
                 flags: unsafe { (*ace).Flags.0 },
                 object_type,
@@ -113,22 +113,22 @@ impl Ace {
             })
         } else if acetype == ACCESS_DENIED_ACE_TYPE {
             let ace = slice.as_ptr() as *const ACCESS_DENIED_ACE;
-            let sid = unsafe { Sid::from_ptr(PSID(&(*ace).SidStart as *const _ as isize))? };
+            let sid = unsafe { Sid::from_ptr(PSID(&(*ace).SidStart as *const _ as *mut _))? };
             (sid, unsafe { (*ace).Mask }, AceType::AccessDenied)
         } else if acetype == ACCESS_DENIED_OBJECT_ACE_TYPE {
             let ace = slice.as_ptr() as *const ACCESS_DENIED_OBJECT_ACE;
             let (object_type, inherited_object_type, sid) = unsafe {
                 if ((*ace).Flags.0 & ACE_OBJECT_TYPE_PRESENT.0) != 0 && ((*ace).Flags.0 & ACE_INHERITED_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (Some(Guid::from((*ace).ObjectType)), Some(Guid::from((*ace).InheritedObjectType)), &(*ace).SidStart as *const _ as isize)
+                    (Some(Guid::from((*ace).ObjectType)), Some(Guid::from((*ace).InheritedObjectType)), &(*ace).SidStart as *const _)
                 } else if ((*ace).Flags.0 & ACE_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (Some(Guid::from((*ace).ObjectType)), None, &(*ace).InheritedObjectType as *const _ as isize)
+                    (Some(Guid::from((*ace).ObjectType)), None, &(*ace).InheritedObjectType as *const _ as *const _)
                 } else if ((*ace).Flags.0 & ACE_INHERITED_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (None, Some(Guid::from((*ace).ObjectType)), &(*ace).InheritedObjectType as *const _ as isize)
+                    (None, Some(Guid::from((*ace).ObjectType)), &(*ace).InheritedObjectType as *const _ as *const _)
                 } else {
-                    (None, None, &(*ace).ObjectType as *const _ as isize)
+                    (None, None, &(*ace).ObjectType as *const _ as *const _)
                 }
             };
-            let sid = unsafe { Sid::from_ptr(PSID(sid))? };
+            let sid = unsafe { Sid::from_ptr(PSID(sid as *mut _))? };
             (sid, unsafe { (*ace).Mask }, AceType::AccessDeniedObject {
                 flags: unsafe { (*ace).Flags.0 },
                 object_type,
@@ -136,22 +136,22 @@ impl Ace {
             })
         } else if acetype == ACCESS_DENIED_CALLBACK_ACE_TYPE {
             let ace = slice.as_ptr() as *const ACCESS_DENIED_CALLBACK_ACE;
-            let sid = unsafe { Sid::from_ptr(PSID(&(*ace).SidStart as *const _ as isize))? };
+            let sid = unsafe { Sid::from_ptr(PSID(&(*ace).SidStart as *const _ as *mut _))? };
             (sid, unsafe { (*ace).Mask }, AceType::AccessDeniedCallback)
         } else if acetype == ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE {
             let ace = slice.as_ptr() as *const ACCESS_DENIED_CALLBACK_OBJECT_ACE;
             let (object_type, inherited_object_type, sid) = unsafe {
                 if ((*ace).Flags.0 & ACE_OBJECT_TYPE_PRESENT.0) != 0 && ((*ace).Flags.0 & ACE_INHERITED_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (Some(Guid::from((*ace).ObjectType)), Some(Guid::from((*ace).InheritedObjectType)), &(*ace).SidStart as *const _ as isize)
+                    (Some(Guid::from((*ace).ObjectType)), Some(Guid::from((*ace).InheritedObjectType)), &(*ace).SidStart as *const _)
                 } else if ((*ace).Flags.0 & ACE_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (Some(Guid::from((*ace).ObjectType)), None, &(*ace).InheritedObjectType as *const _ as isize)
+                    (Some(Guid::from((*ace).ObjectType)), None, &(*ace).InheritedObjectType as *const _ as *const _)
                 } else if ((*ace).Flags.0 & ACE_INHERITED_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (None, Some(Guid::from((*ace).ObjectType)), &(*ace).InheritedObjectType as *const _ as isize)
+                    (None, Some(Guid::from((*ace).ObjectType)), &(*ace).InheritedObjectType as *const _ as *const _)
                 } else {
-                    (None, None, &(*ace).ObjectType as *const _ as isize)
+                    (None, None, &(*ace).ObjectType as *const _ as *const _)
                 }
             };
-            let sid = unsafe { Sid::from_ptr(PSID(sid))? };
+            let sid = unsafe { Sid::from_ptr(PSID(sid as *mut _))? };
             (sid, unsafe { (*ace).Mask }, AceType::AccessDeniedCallbackObject {
                 flags: unsafe { (*ace).Flags.0 },
                 object_type,
@@ -159,26 +159,26 @@ impl Ace {
             })
         } else if acetype == SYSTEM_AUDIT_ACE_TYPE {
             let ace = slice.as_ptr() as *const SYSTEM_AUDIT_ACE;
-            let sid = unsafe { Sid::from_ptr(PSID(&(*ace).SidStart as *const _ as isize))? };
+            let sid = unsafe { Sid::from_ptr(PSID(&(*ace).SidStart as *const _ as *mut _))? };
             (sid, unsafe { (*ace).Mask }, AceType::Audit)
         } else if acetype == SYSTEM_AUDIT_CALLBACK_ACE_TYPE {
             let ace = slice.as_ptr() as *const SYSTEM_AUDIT_CALLBACK_ACE;
-            let sid = unsafe { Sid::from_ptr(PSID(&(*ace).SidStart as *const _ as isize))? };
+            let sid = unsafe { Sid::from_ptr(PSID(&(*ace).SidStart as *const _ as *mut _))? };
             (sid, unsafe { (*ace).Mask }, AceType::AuditCallback)
         } else if acetype == SYSTEM_AUDIT_OBJECT_ACE_TYPE {
             let ace = slice.as_ptr() as *const SYSTEM_AUDIT_OBJECT_ACE;
             let (object_type, inherited_object_type, sid) = unsafe {
                 if ((*ace).Flags.0 & ACE_OBJECT_TYPE_PRESENT.0) != 0 && ((*ace).Flags.0 & ACE_INHERITED_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (Some(Guid::from((*ace).ObjectType)), Some(Guid::from((*ace).InheritedObjectType)), &(*ace).SidStart as *const _ as isize)
+                    (Some(Guid::from((*ace).ObjectType)), Some(Guid::from((*ace).InheritedObjectType)), &(*ace).SidStart as *const _)
                 } else if ((*ace).Flags.0 & ACE_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (Some(Guid::from((*ace).ObjectType)), None, &(*ace).InheritedObjectType as *const _ as isize)
+                    (Some(Guid::from((*ace).ObjectType)), None, &(*ace).InheritedObjectType as *const _ as *const _)
                 } else if ((*ace).Flags.0 & ACE_INHERITED_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (None, Some(Guid::from((*ace).ObjectType)), &(*ace).InheritedObjectType as *const _ as isize)
+                    (None, Some(Guid::from((*ace).ObjectType)), &(*ace).InheritedObjectType as *const _ as *const _)
                 } else {
-                    (None, None, &(*ace).ObjectType as *const _ as isize)
+                    (None, None, &(*ace).ObjectType as *const _ as *const _)
                 }
             };
-            let sid = unsafe { Sid::from_ptr(PSID(sid))? };
+            let sid = unsafe { Sid::from_ptr(PSID(sid as *mut _))? };
             (sid, unsafe { (*ace).Mask }, AceType::AuditObject {
                 flags: unsafe { (*ace).Flags.0 },
                 object_type,
@@ -188,16 +188,16 @@ impl Ace {
             let ace = slice.as_ptr() as *const SYSTEM_AUDIT_CALLBACK_OBJECT_ACE;
             let (object_type, inherited_object_type, sid) = unsafe {
                 if ((*ace).Flags.0 & ACE_OBJECT_TYPE_PRESENT.0) != 0 && ((*ace).Flags.0 & ACE_INHERITED_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (Some(Guid::from((*ace).ObjectType)), Some(Guid::from((*ace).InheritedObjectType)), &(*ace).SidStart as *const _ as isize)
+                    (Some(Guid::from((*ace).ObjectType)), Some(Guid::from((*ace).InheritedObjectType)), &(*ace).SidStart as *const _)
                 } else if ((*ace).Flags.0 & ACE_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (Some(Guid::from((*ace).ObjectType)), None, &(*ace).InheritedObjectType as *const _ as isize)
+                    (Some(Guid::from((*ace).ObjectType)), None, &(*ace).InheritedObjectType as *const _ as *const _)
                 } else if ((*ace).Flags.0 & ACE_INHERITED_OBJECT_TYPE_PRESENT.0) != 0 {
-                    (None, Some(Guid::from((*ace).ObjectType)), &(*ace).InheritedObjectType as *const _ as isize)
+                    (None, Some(Guid::from((*ace).ObjectType)), &(*ace).InheritedObjectType as *const _ as *const _)
                 } else {
-                    (None, None, &(*ace).ObjectType as *const _ as isize)
+                    (None, None, &(*ace).ObjectType as *const _ as *const _)
                 }
             };
-            let sid = unsafe { Sid::from_ptr(PSID(sid))? };
+            let sid = unsafe { Sid::from_ptr(PSID(sid as *mut _))? };
             (sid, unsafe { (*ace).Mask }, AceType::AuditCallbackObject {
                 flags: unsafe { (*ace).Flags.0 },
                 object_type,
@@ -205,7 +205,7 @@ impl Ace {
             })
         } else if acetype == SYSTEM_MANDATORY_LABEL_ACE_TYPE {
             let ace = slice.as_ptr() as *const SYSTEM_MANDATORY_LABEL_ACE;
-            let sid = unsafe { Sid::from_ptr(PSID(&(*ace).SidStart as *const _ as isize))? };
+            let sid = unsafe { Sid::from_ptr(PSID(&(*ace).SidStart as *const _ as *mut _))? };
             (sid, unsafe { (*ace).Mask }, AceType::MandatoryLabel)
         } else {
             unimplemented!("unsupported ACE type {}, please contact project maintainers with the following debug information: {:?}", acetype, slice);

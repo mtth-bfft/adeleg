@@ -1,6 +1,5 @@
 use core::convert::TryFrom;
-use core::fmt::{Debug, Display};
-use windows::core::alloc::fmt::Formatter;
+use core::fmt::{Debug, Formatter, Display};
 use windows::core::GUID;
 
 // Simple in-between type exposed in our API, so that our

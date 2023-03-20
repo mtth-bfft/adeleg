@@ -1,6 +1,7 @@
-use windows::Win32::Security::{IsValidSecurityDescriptor, GetSecurityDescriptorControl, GetSecurityDescriptorOwner, GetLengthSid, GetSecurityDescriptorGroup, GetSecurityDescriptorDacl, GetAclInformation, ACL_SIZE_INFORMATION, AclSizeInformation, ACL, GetSecurityDescriptorSacl, SECURITY_DESCRIPTOR};
+use windows::Win32::Security::{PSECURITY_DESCRIPTOR, IsValidSecurityDescriptor, GetSecurityDescriptorControl, GetSecurityDescriptorOwner, GetLengthSid, GetSecurityDescriptorGroup, GetSecurityDescriptorDacl, GetAclInformation, ACL_SIZE_INFORMATION, AclSizeInformation, ACL, GetSecurityDescriptorSacl};
 use std::ptr::null_mut;
-use windows::Win32::Foundation::PSID;
+use windows::Win32::Foundation::{PSID, HLOCAL};
+use windows::core::PCWSTR;
 use crate::error::AuthzError;
 use crate::utils::get_last_error;
 use crate::{Sid, Acl};
@@ -19,27 +20,28 @@ pub struct SecurityDescriptor {
 
 impl SecurityDescriptor {
     pub fn from_bytes(slice: &[u8]) -> Result<Self, AuthzError> {
-        let is_valid = unsafe { IsValidSecurityDescriptor(slice.as_ptr() as *const _) };
+        let p_sd = PSECURITY_DESCRIPTOR(slice.as_ptr() as *const _ as *mut _);
+        let is_valid = unsafe { IsValidSecurityDescriptor(p_sd) };
         if !is_valid.as_bool() {
             return Err(AuthzError::InvalidSecurityDescriptor(slice.to_vec()));
         }
 
         let mut controls: u16 = 0;
         let mut revision: u32 = 0;
-        let succeeded = unsafe { GetSecurityDescriptorControl(slice.as_ptr() as *const _, &mut controls as *mut _, &mut revision as *mut _) };
+        let succeeded = unsafe { GetSecurityDescriptorControl(p_sd, &mut controls as *mut _, &mut revision as *mut _) };
         if !succeeded.as_bool() {
             return Err(AuthzError::GetSecurityDescriptorControlFailed { code: get_last_error(), bytes: slice.to_vec() });
         }
 
         // Parse the owner from the SD
         let owner = {
-            let mut psid = PSID(0);
+            let mut psid = PSID(null_mut());
             let mut defaulted: i32 = 0;
-            let succeeded = unsafe { GetSecurityDescriptorOwner(slice.as_ptr() as *const _, &mut psid as *mut _, &mut defaulted as *mut _) };
+            let succeeded = unsafe { GetSecurityDescriptorOwner(p_sd, &mut psid as *mut _, &mut defaulted as *mut _) };
             if !succeeded.as_bool() {
                 return Err(AuthzError::GetSecurityDescriptorOwnerFailed { code: get_last_error(), ptr: null_mut(), bytes: slice.to_vec() });
             }
-            else if psid.0 == 0 {
+            else if psid.is_invalid() {
                 None // a NULL pointer is returned if there is no owner in this SD
             }
             else if (psid.0 as usize) < (slice.as_ptr() as usize) || (psid.0 as usize) >= (slice.as_ptr() as usize + slice.len()) {
@@ -57,13 +59,13 @@ impl SecurityDescriptor {
 
         // Parse the primary group, if any
         let group = {
-            let mut psid = PSID(0);
+            let mut psid = PSID(null_mut());
             let mut defaulted: i32 = 0;
-            let succeeded = unsafe { GetSecurityDescriptorGroup(slice.as_ptr() as *const _, &mut psid as *mut _, &mut defaulted as *mut _) };
+            let succeeded = unsafe { GetSecurityDescriptorGroup(p_sd, &mut psid as *mut _, &mut defaulted as *mut _) };
             if !succeeded.as_bool() {
                 return Err(AuthzError::GetSecurityDescriptorGroupFailed { code: get_last_error(), ptr: null_mut(), bytes: slice.to_vec() });
             }
-            else if psid.0 == 0 {
+            else if psid.is_invalid() {
                 None // a NULL pointer is returned if there is no primary group in this SD
             }
             else if (psid.0 as usize) < (slice.as_ptr() as usize) || (psid.0 as usize) >= (slice.as_ptr() as usize + slice.len()) {
@@ -84,7 +86,7 @@ impl SecurityDescriptor {
             let mut acl = null_mut() as *mut ACL;
             let mut present: i32 = 0;
             let mut defaulted: i32 = 0;
-            let succeeded = unsafe { GetSecurityDescriptorDacl(slice.as_ptr() as *const _, &mut present as *mut _, &mut acl as *mut _, &mut defaulted as *mut _) };
+            let succeeded = unsafe { GetSecurityDescriptorDacl(p_sd, &mut present as *mut _, &mut acl as *mut _, &mut defaulted as *mut _) };
             if !succeeded.as_bool() {
                 return Err(AuthzError::GetSecurityDescriptorDaclFailed { code: get_last_error(), ptr: null_mut(), bytes: slice.to_vec() });
             }
@@ -118,7 +120,7 @@ impl SecurityDescriptor {
             let mut acl = null_mut() as *mut ACL;
             let mut present: i32 = 0;
             let mut defaulted: i32 = 0;
-            let succeeded = unsafe { GetSecurityDescriptorSacl(slice.as_ptr() as *const _, &mut present as *mut _, &mut acl as *mut _, &mut defaulted as *mut _) };
+            let succeeded = unsafe { GetSecurityDescriptorSacl(p_sd, &mut present as *mut _, &mut acl as *mut _, &mut defaulted as *mut _) };
             if !succeeded.as_bool() {
                 return Err(AuthzError::GetSecurityDescriptorSaclFailed { code: get_last_error(), ptr: null_mut(), bytes: slice.to_vec() });
             }
@@ -199,15 +201,20 @@ impl SecurityDescriptor {
             &format!(";{}-519)", root_domain_sid.to_string())
         );
 
-        let mut psd: *mut SECURITY_DESCRIPTOR = null_mut();
+        let mut p_sd = PSECURITY_DESCRIPTOR(null_mut());
         let mut sd_size: u32 = 0;
-        let succeeded = unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_str(), SDDL_REVISION_1, &mut psd as *mut _, &mut sd_size as *mut _) };
+        let sddl_u16: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
+        let succeeded = unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(PCWSTR(sddl_u16.as_ptr()), SDDL_REVISION_1, &mut p_sd, Some(&mut sd_size as *mut _)) };
         if !succeeded.as_bool() {
             return Err(AuthzError::InvalidStringSecurityDescriptor { code: get_last_error(), str: sddl });
         }
-        let slice = unsafe { &*std::ptr::slice_from_raw_parts(psd as *const u8, sd_size as usize) };
+        let slice = unsafe { &*std::ptr::slice_from_raw_parts(p_sd.0 as *const u8, sd_size as usize) };
         let res = SecurityDescriptor::from_bytes(slice);
-        unsafe { LocalFree(psd as isize); }
+        if let Err(e) = unsafe { LocalFree(HLOCAL(p_sd.0 as isize)) } {
+            if e.code().is_err() {
+                panic!("Invalid call to LocalFree()");
+            }
+        }
         res
     }
 }

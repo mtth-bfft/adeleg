@@ -1,5 +1,4 @@
-use core::fmt::Display;
-use windows::core::alloc::fmt::Formatter;
+use core::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone)]
 pub enum AuthzError {
