@@ -946,7 +946,7 @@ impl<'a> Engine<'a> {
         }
         if (access_mask & ADS_RIGHT_WRITE_DAC.0 as u32) != 0 {
             res.push(if self.resolve_names {
-                "Add/delete delegations"
+                "Grant/revoke delegations for anyone to do anything"
             } else {
                 "WRITE_DAC"
             }.to_owned());
