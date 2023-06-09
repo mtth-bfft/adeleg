@@ -194,15 +194,8 @@ impl BasicApp {
         let results = self.results.as_ref().unwrap().borrow();
         let mut warning_count = 0;
         for (_, result) in results.iter() {
-            match result {
-                Ok(res) => {
-                    if res.non_canonical_ace.is_some() {
-                        warning_count += 1;
-                    }
-                },
-                Err(_) => {
-                    warning_count += 1;
-                },
+            if result.is_err() {
+                warning_count += 1;
             }
         }
         if warning_count > 0 {
@@ -808,35 +801,6 @@ impl BasicApp {
                         index: Some(0),
                         column_index: 2,
                         text: Some("DACL is configured to block inheritance of parent container ACEs".to_owned()),
-                        image: None,
-                    });
-                }
-                if let Some(ace) = &result.non_canonical_ace {
-                    self.list.insert_item(nwg::InsertListViewItem {
-                        index: Some(0),
-                        column_index: 0,
-                        text: Some("\u{1f518} Warning".to_owned()),
-                        image: None,
-                    });
-                    self.list.insert_item(nwg::InsertListViewItem {
-                        index: Some(0),
-                        column_index: 1,
-                        text: Some("Global".to_owned()),
-                        image: None,
-                    });
-                    self.list.insert_item(nwg::InsertListViewItem {
-                        index: Some(0),
-                        column_index: 2,
-                        text: Some(format!("DACL is not in canonical order, e.g. see {} ACE for {}: {}",
-                            if ace.grants_access() { "allow" } else { "deny" },
-                            engine.resolve_sid(&ace.trustee).map(|(dn, _)| dn).unwrap_or(ace.trustee.to_string()),
-                            engine.describe_ace(
-                                ace.access_mask,
-                                ace.get_object_type(),
-                                ace.get_inherited_object_type(),
-                                ace.get_container_inherit(),
-                                ace.get_inherit_only()
-                        ))),
                         image: None,
                     });
                 }

@@ -7,7 +7,7 @@ use windows::Win32::Networking::Ldap::{LDAP_SCOPE_BASE, LDAP_SCOPE_SUBTREE, LDAP
 use windows::Win32::Security::SID_NAME_USE;
 use windows::core::{PWSTR, PCSTR};
 use windows::Win32::Foundation::{PSID, BOOL};
-use authz::{SecurityDescriptor, Sid, Ace, Acl};
+use authz::{SecurityDescriptor, Sid, Ace};
 use windows::Win32::System::LibraryLoader::{LoadLibraryA, GetProcAddress};
 use winldap::connection::LdapConnection;
 use winldap::utils::{get_attr_strs, get_attr_str};
@@ -115,7 +115,6 @@ pub struct AdelegResult {
     pub(crate) class_guid: Guid,
     pub(crate) dacl_protected: bool,
     pub(crate) owner: Option<Sid>,
-    pub(crate) non_canonical_ace: Option<Ace>,
     pub(crate) deleted_trustee: Vec<Ace>,
     pub(crate) orphan_aces: Vec<Ace>,
     pub(crate) delegations: Vec<(Delegation, Sid, Vec<Ace>, Vec<Ace>)>,
@@ -125,7 +124,6 @@ impl AdelegResult {
     pub(crate) fn needs_to_be_displayed(&self, view_builtin_delegations: bool) -> bool {
         self.dacl_protected ||
             self.owner.is_some() ||
-            self.non_canonical_ace.is_some() ||
             !self.deleted_trustee.is_empty() ||
             !self.orphan_aces.is_empty() ||
             self.delegations.iter().any(|(d, _, _, _)| !d.builtin || view_builtin_delegations)
@@ -294,7 +292,6 @@ impl<'a> Engine<'a> {
                     owner: None,
                     deleted_trustee: vec![],
                     orphan_aces: vec![],
-                    non_canonical_ace: self.check_acl_canonicality(&dacl).err(),
                     delegations: vec![],
                 };
                 for ace in dacl.aces {
@@ -412,7 +409,6 @@ impl<'a> Engine<'a> {
                 class_guid: most_specific_class_guid.clone(),
                 dacl_protected,
                 owner,
-                non_canonical_ace: self.check_acl_canonicality(&dacl).err(),
                 deleted_trustee: vec![],
                 orphan_aces: vec![],
                 delegations: vec![],
@@ -520,27 +516,6 @@ impl<'a> Engine<'a> {
         Ok(res)
     }
 
-    pub fn check_acl_canonicality(&self, acl: &Acl) -> Result<(), Ace> {
-        let mut prev_ace: Option<&Ace> = None;
-        for ace in &acl.aces {
-            if let Some(prev_ace) = prev_ace {
-                // Bad patterns we are looking for:
-                // Explicit ACE after an inherited one
-                if !ace.is_inherited() && prev_ace.is_inherited() {
-                    return Err(ace.to_owned());
-                }
-                // Deny ACE after an allow one amongst explicit ACEs
-                // (in inherited ACEs, deny ACEs of a grandparent can occur after allow ones of a parent)
-                if !ace.grants_access() && prev_ace.grants_access() && !ace.is_inherited() && !prev_ace.is_inherited() {
-                    return Err(ace.to_owned());
-                }
-            }
-
-            prev_ace = Some(ace);
-        }
-        Ok(())
-    }
-
     pub fn is_ace_interesting(&self, ace: &Ace, admincount: bool, adminsdholder_aces: &[Ace], default_aces: &[Ace]) -> bool {
         if ace.is_inherited() {
             return false; // ignore inherited ACEs
@@ -623,7 +598,7 @@ impl<'a> Engine<'a> {
                     }
                 }
                 let keep = if let Ok(record) = record {
-                    record.dacl_protected || !record.delegations.is_empty() || !record.deleted_trustee.is_empty() || record.non_canonical_ace.is_some() || record.owner.is_some() || !record.orphan_aces.is_empty()
+                    record.dacl_protected || !record.delegations.is_empty() || !record.deleted_trustee.is_empty() || record.owner.is_some() || !record.orphan_aces.is_empty()
                 } else {
                     true
                 };
@@ -766,7 +741,6 @@ impl<'a> Engine<'a> {
                             class_guid: Guid::try_from("bf967a8b-0de6-11d0-a285-00aa003049e2").unwrap(), // container class GUID
                             dacl_protected: false,
                             owner: None,
-                            non_canonical_ace: None,
                             deleted_trustee: vec![],
                             orphan_aces: vec![],
                             delegations: vec![],

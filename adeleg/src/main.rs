@@ -213,23 +213,6 @@ fn main() {
                     "DACL is configured to block inheritance of parent container ACEs",
                 ]).expect("unable to write CSV record");
             }
-            if let Some(ace) = &res.non_canonical_ace {
-                writer.write_record(&[
-                    location.to_string().as_str(),
-                    "Global",
-                    "External",
-                    "Warning",
-                    &format!("ACL is not in canonical order, e.g. see {} ACE for {}: {}", 
-                        if ace.grants_access() { "allow" } else { "deny" },
-                        engine.resolve_sid(&ace.trustee).map(|(dn, _)| dn).unwrap_or(ace.trustee.to_string()),
-                        engine.describe_ace(
-                            ace.access_mask,
-                            ace.get_object_type(),
-                            ace.get_inherited_object_type(),
-                            ace.get_container_inherit(),
-                            ace.get_inherit_only()))
-                ]).expect("unable to write CSV record");
-            }
             for ace in &res.deleted_trustee {
                 writer.write_record(&[
                     location.to_string().as_str(),
@@ -300,9 +283,6 @@ fn main() {
         let mut reindexed: HashMap<Sid, HashMap<DelegationLocation, AdelegResult>> = HashMap::new();
         for (location, res) in res.into_iter() {
             if let Ok(res) = res {
-                if res.non_canonical_ace.is_some() {
-                    warning_count += 1;
-                }
                 if res.deleted_trustee.is_empty() {
                     warning_count += 1;
                 }
@@ -315,7 +295,6 @@ fn main() {
                                 class_guid: res.class_guid.clone(),
                                 owner: None,
                                 dacl_protected: false,
-                                non_canonical_ace: None,
                                 deleted_trustee: vec![],
                                 orphan_aces: vec![],
                                 delegations: vec![],
@@ -332,7 +311,6 @@ fn main() {
                                 class_guid: res.class_guid.clone(),
                                 owner: None,
                                 dacl_protected: false,
-                                non_canonical_ace: None,
                                 deleted_trustee: vec![],
                                 orphan_aces: vec![],
                                 delegations: vec![],
@@ -352,7 +330,6 @@ fn main() {
                                 class_guid: res.class_guid.clone(),
                                 owner: None,
                                 dacl_protected: false,
-                                non_canonical_ace: None,
                                 deleted_trustee: vec![],
                                 orphan_aces: vec![],
                                 delegations: vec![],
@@ -447,18 +424,6 @@ fn main() {
             }
             if res.dacl_protected {
                 println!("       /!\\ ACL is configured to block inheritance of parent container ACEs");
-            }
-            if let Some(ace) = &res.non_canonical_ace {
-                println!("       /!\\ ACL is not in canonical order, e.g. see {} ACE for {} : {}",
-                    if ace.grants_access() { "allow" } else { "deny" },
-                    engine.resolve_sid(&ace.trustee).map(|(dn, _)| dn).unwrap_or(ace.trustee.to_string()),
-                    engine.describe_ace(
-                        ace.access_mask,
-                        ace.get_object_type(),
-                        ace.get_inherited_object_type(),
-                        ace.get_container_inherit(),
-                        ace.get_inherit_only()
-                ));
             }
             if !res.deleted_trustee.is_empty() {
                 println!("       /!\\ ACEs for trustees which do not exist anymore and should be cleaned up:");
