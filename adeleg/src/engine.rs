@@ -832,9 +832,7 @@ impl<'a> Engine<'a> {
                     else if let Some(name) = self.schema.property_set_names.get(guid) {
                         res.push(format!("Write attributes of category {}", name));
                     }
-                    else {
-                        res.push("Write all properties".to_owned());
-                    }
+                    // If the GUID is not an attribute or a property set, the WRITE_PROP bit is useless and does not delegate anything
                 } else {
                     res.push("Write all properties".to_owned());
                 }
@@ -847,9 +845,8 @@ impl<'a> Engine<'a> {
                 if let Some(guid) = object_type {
                     if let Some(name) = self.schema.control_access_names.get(guid) {
                         res.push(capitalize(name));
-                    } else {
-                        res.push("Perform all application-specific operations".to_owned());
                     }
+                    // If the GUID is not a controlaccessright, the CONTROL_ACCESS bit is useless and does not delegate anything
                 }
                 else {
                     res.push("Perform all application-specific operations".to_owned());
@@ -861,17 +858,13 @@ impl<'a> Engine<'a> {
         if (access_mask & ADS_RIGHT_DS_CREATE_CHILD.0 as u32) != 0 {
             if self.resolve_names {
                 if let Some(guid) = object_type {
-                    let mut found = false;
                     for (class_name, class_guid) in &self.schema.class_guids {
                         if class_guid == guid {
                             res.push(format!("Create child {} objects", class_name));
-                            found = true;
                             break;
                         }
                     }
-                    if !found {
-                        res.push("Create child objects of any type".to_owned());
-                    }
+                    // If the GUID is not a class, the CREATE_CHILD bit is useless and does not delegate anything
                 }
                 else {
                     res.push("Create child objects of any type".to_owned());
@@ -883,17 +876,13 @@ impl<'a> Engine<'a> {
         if (access_mask & ADS_RIGHT_DS_DELETE_CHILD.0 as u32) != 0 {
             if self.resolve_names {
                 if let Some(guid) = object_type {
-                    let mut found = false;
                     for (class_name, class_guid) in &self.schema.class_guids {
                         if class_guid == guid {
                             res.push(format!("Delete child {} objects", class_name));
-                            found = true;
                             break;
                         }
                     }
-                    if !found {
-                        res.push("Delete child objects of any type".to_owned());
-                    }
+                    // If the GUID is not a class, the DELETE_CHILD bit is useless and does not delegate anything
                 }
                 else {
                     res.push("Delete child objects of any type".to_owned());
@@ -944,9 +933,8 @@ impl<'a> Engine<'a> {
                 if let Some(guid) = object_type {
                     if let Some(name) = self.schema.validated_write_names.get(guid) {
                         res.push(capitalize(name));
-                    } else {
-                        res.push("Perform all validated writes".to_owned());
                     }
+                    // If the GUID is not a validated write, the DS_SELF bit is useless and does not delegate anything
                 }
                 else {
                     res.push("Perform all validated writes".to_owned());
@@ -966,8 +954,8 @@ impl<'a> Engine<'a> {
         let mut res = res.join(", ");
         if self.resolve_names {
             if container_inherit {
-                let mut found = false;
                 if let Some(guid) = inherit_object_type {
+                    let mut found = false;
                     for (class_name, class_guid) in &self.schema.class_guids {
                         if class_guid == guid {
                             res.push_str(&format!(", on all {} child objects", class_name));
@@ -975,11 +963,13 @@ impl<'a> Engine<'a> {
                             break;
                         }
                     }
+                    if !found {
+                        res.push_str(", on no child objects");
+                    }
                 }
-                if !found {
+                else {
                     res.push_str(", on all child objects");
                 }
-    
                 if !inherit_only {
                     res.push_str(" and the container itself");
                 }
