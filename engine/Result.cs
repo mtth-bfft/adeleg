@@ -107,7 +107,6 @@ namespace adeleg.engine
         private ObjectClass _type;
         private string _dn;
         private bool _isTier0;
-        // Generalization-filled parts:
         private SecurityIdentifier _sid;
         private int _domainRid;
         private int _rootDomainRid;
@@ -122,11 +121,18 @@ namespace adeleg.engine
         public int RootDomainRid { get => _rootDomainRid; }
 
         /**
-         * To build a trustee, you must have its SID, and the metadata of its forest.
-         * Everything else is optional for prettier display.
+         * When building a trustee from a live/dumped LDAP security descriptor, you will always have
+         * its SID (and, often, its type+DN+samaccountname and whether it should be considered Tier0).
+         * SID is used for access right computations, and the rest is just for pretty pretting.
+         * When building a trustee for generalized results, we often won't include the SID if it's
+         * a S-1-5-21-something-domain-specific which does not generalize at all.
          */
-        public ResultTrustee(SecurityIdentifier sid, ObjectClass type = ObjectClass.UnknownTrustee, string dn = null, string samAccountName = null, bool isTier0 = false)
+        public ResultTrustee(SecurityIdentifier sid = null, ObjectClass type = ObjectClass.UnknownTrustee, string dn = null, string samAccountName = null, bool isTier0 = false)
         {
+            if (sid == null && dn == null && samAccountName == null)
+            {
+                throw new ArgumentNullException("SecurityIdentifier (can only be null if DN or SamAccountName is provided)");
+            }
             _sid = sid;
             _type = type;
             _dn = dn;
