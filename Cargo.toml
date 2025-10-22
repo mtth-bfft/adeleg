@@ -1,7 +1,0 @@
-[workspace]
-
-members = [
-    "winldap",
-    "authz",
-    "adeleg",
-]
