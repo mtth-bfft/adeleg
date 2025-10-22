@@ -143,26 +143,29 @@ namespace adeleg.engine
 
         private ForestMetadata ScanForestMetadata(string forestDN, IConnector rootDomainDataSource)
         {
-            ForestMetadata res = new ForestMetadata();
-            res.domainSidPerPartition = new Dictionary<string, SecurityIdentifier>();
-            res.domainAdminsSidPerPartition = new Dictionary<string, SecurityIdentifier>();
-            res.sidResolutionCachePerPartition = new Dictionary<string, Dictionary<SecurityIdentifier, Tuple<ObjectClass, string, string>>>();
-            res.defaultSdPerPartitionPerClassName = new Dictionary<string, Dictionary<string, CommonSecurityDescriptor>>();
-            res.adminSdHolderSdPerPartition = new Dictionary<string, CommonSecurityDescriptor>();
-            res.adminSdHolderProtectedDn = new HashSet<string>();
-            res.tier0Sids = new HashSet<SecurityIdentifier>();
+            ForestMetadata res = new ForestMetadata
+            {
+                domainSidPerPartition = new Dictionary<string, SecurityIdentifier>(),
+                domainAdminsSidPerPartition = new Dictionary<string, SecurityIdentifier>(),
+                sidResolutionCachePerPartition = new Dictionary<string, Dictionary<SecurityIdentifier, Tuple<ObjectClass, string, string>>>(),
+                defaultSdPerPartitionPerClassName = new Dictionary<string, Dictionary<string, CommonSecurityDescriptor>>(),
+                adminSdHolderSdPerPartition = new Dictionary<string, CommonSecurityDescriptor>(),
+                adminSdHolderProtectedDn = new HashSet<string>(),
+                tier0Sids = new HashSet<SecurityIdentifier>(),
 
-            res.forestSid = rootDomainDataSource.GetDomainSidByPartitionDN(forestDN);
+                forestSid = rootDomainDataSource.GetDomainSidByPartitionDN(forestDN),
 
-            // Inventory schema classes so we can display pretty names
-            res.schemaClassNamePerGuid = new Dictionary<Guid, string>(rootDomainDataSource.GetSchemaClasses());
+                // Inventory schema classes so we can display pretty names
+                schemaClassNamePerGuid = new Dictionary<Guid, string>(rootDomainDataSource.GetSchemaClasses()),
 
-            // Inventory schema attributes so we can display pretty names
-            res.schemaAttributeNamePerGuid = new Dictionary<Guid, string>(rootDomainDataSource.GetSchemaAttributes());
+                // Inventory schema attributes so we can display pretty names
+                schemaAttributeNamePerGuid = new Dictionary<Guid, string>(rootDomainDataSource.GetSchemaAttributes()),
 
-            // Inventory property sets so we can know which properties they give access to, and display pretty names
-            res.schemaPropertySetNamePerGuid = new Dictionary<Guid, string>();
-            res.schemaPropertySetMembersPerGuid = new Dictionary<Guid, HashSet<Guid>>();
+                // Inventory property sets so we can know which properties they give access to, and display pretty names
+                schemaPropertySetNamePerGuid = new Dictionary<Guid, string>(),
+                schemaPropertySetMembersPerGuid = new Dictionary<Guid, HashSet<Guid>>()
+            };
+
             foreach (KeyValuePair<Guid, Tuple<string, HashSet<Guid>>> propset in rootDomainDataSource.GetPropertySets())
             {
                 res.schemaPropertySetNamePerGuid[propset.Key] = propset.Value.Item1;
