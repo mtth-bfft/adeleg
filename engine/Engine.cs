@@ -734,12 +734,13 @@ namespace adeleg.engine
 
             for (int i = 0; i < results.Count; i++) {
                 Result res = results[i];
+                ResultTrustee generalizedTrustee = this.Generalize(res.Trustee);
 
                 if (res is OwnerResult)
                 {
                     generalized.Add(new OwnerResult(
                         res.Location,
-                        res.Trustee,
+                        generalizedTrustee,
                         new string[] { },
                         new string[] { }
                     ));
@@ -751,7 +752,7 @@ namespace adeleg.engine
                         res2.Ace,
                         res2.GetAccessDescriptionLines(),
                         res.Location,
-                        res.Trustee,
+                        generalizedTrustee,
                         new string[] { },
                         new string[] { }
                     ));
@@ -762,7 +763,7 @@ namespace adeleg.engine
                         res2.Ace,
                         res2.GetAccessDescriptionLines(),
                         res.Location,
-                        res.Trustee,
+                        generalizedTrustee,
                         new string[] { },
                         new string[] { }
                     ));
@@ -838,6 +839,35 @@ namespace adeleg.engine
             }*/
 
             return generalized;
+        }
+
+        public ResultTrustee Generalize(ResultTrustee trustee)
+        {
+            bool isSidGeneralizable = true;
+
+            string strSid = trustee.Sid.ToString().ToUpperInvariant();
+            if (strSid.StartsWith("S-1-5-21-"))
+            {
+                string strRid = strSid.Split('-').Last();
+                int rid = int.Parse(strRid);
+                if (rid >= 1000)
+                {
+                    isSidGeneralizable = false;
+                }
+            }
+
+            if (isSidGeneralizable)
+            {
+                return new ResultTrustee(trustee.Sid, trustee.Type);
+            }
+            else if (trustee.SamAccountName != null)
+            {
+                return new ResultTrustee(null, trustee.Type, null, trustee.SamAccountName);
+            }
+            else
+            {
+                return new ResultTrustee(null, trustee.Type, trustee.Dn);
+            }
         }
     }
 }
