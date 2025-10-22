@@ -14,3 +14,10 @@ jobs:
       uses: microsoft/setup-msbuild@v2
     - name: Build a debug executable
       run: msbuild adeleg.sln /nologo /warnAsError /p:Configuration=Debug /p:Platform="Any CPU"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: executable
+        path: |
+          bin/Debug/adeleg.exe
+          bin/Debug/adeleg.pdb
+        if-no-files-found: error
