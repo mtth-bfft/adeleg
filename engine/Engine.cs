@@ -10,6 +10,8 @@ namespace adeleg.engine
 {
     public struct ForestMetadata {
         public SecurityIdentifier forestSid;
+        public SecurityIdentifier schemaAdminSid;
+        public string schemaNC;
         public Dictionary<string, SecurityIdentifier> domainSidPerPartition;
         public Dictionary<string, SecurityIdentifier> domainAdminsSidPerPartition;
         public Dictionary<Guid, string> schemaClassNamePerGuid;
@@ -31,6 +33,8 @@ namespace adeleg.engine
         private readonly static SecurityIdentifier creatorGroupSid = new SecurityIdentifier("S-1-3-1");
         private readonly static SecurityIdentifier everyoneSid = new SecurityIdentifier("S-1-1-0");
         private readonly static SecurityIdentifier administratorsSid = new SecurityIdentifier("S-1-5-32-544");
+        private readonly static SecurityIdentifier localSystemSid = new SecurityIdentifier("S-1-5-18");
+
         /**
          * Group resolution is limited to the same domain: adding users from other domains across trusts
          * won't protect them. These groups are present in both root and non-root domains.
@@ -143,8 +147,14 @@ namespace adeleg.engine
 
         private ForestMetadata ScanForestMetadata(string forestDN, IConnector rootDomainDataSource)
         {
+            SecurityIdentifier forestSid = rootDomainDataSource.GetDomainSidByPartitionDN(forestDN);
+
             ForestMetadata res = new ForestMetadata
             {
+                forestSid = forestSid,
+                schemaAdminSid = new SecurityIdentifier($"{forestSid}-518"),
+                schemaNC = rootDomainDataSource.GetSchemaNC(),
+
                 domainSidPerPartition = new Dictionary<string, SecurityIdentifier>(),
                 domainAdminsSidPerPartition = new Dictionary<string, SecurityIdentifier>(),
                 sidResolutionCachePerPartition = new Dictionary<string, Dictionary<SecurityIdentifier, Tuple<ObjectClass, string, string>>>(),
@@ -152,8 +162,6 @@ namespace adeleg.engine
                 adminSdHolderSdPerPartition = new Dictionary<string, CommonSecurityDescriptor>(),
                 adminSdHolderProtectedDn = new HashSet<string>(),
                 tier0Sids = new HashSet<SecurityIdentifier>(),
-
-                forestSid = rootDomainDataSource.GetDomainSidByPartitionDN(forestDN),
 
                 // Inventory schema classes so we can display pretty names
                 schemaClassNamePerGuid = new Dictionary<Guid, string>(rootDomainDataSource.GetSchemaClasses()),
@@ -634,7 +642,24 @@ namespace adeleg.engine
                     continue;
                 }
 
-                if (obj.securityDescriptor.Owner != null && obj.securityDescriptor.Owner != domainAdminsSid && obj.securityDescriptor.Owner != administratorsSid)
+                if (partitionDN.ToLowerInvariant() == forestMetadata.schemaNC.ToLowerInvariant() &&
+                    obj.securityDescriptor.Owner != null &&
+                    obj.securityDescriptor.Owner != forestMetadata.schemaAdminSid)
+                {
+                    Tuple<ObjectClass, string, string> resolved = this.ResolveFromSid(partitionDN, obj.securityDescriptor.Owner);
+                    List<string> warnings = new List<string> { "Schema definition objects should be owned by Schema Admins" };
+
+                    res.Add(new OwnerResult(
+                        new ResultLocationDn(obj.distinguishedName, obj.mostSpecificClass),
+                        new ResultTrustee(obj.securityDescriptor.Owner, resolved.Item1, resolved.Item2, resolved.Item3, forestMetadata.tier0Sids.Contains(obj.securityDescriptor.Owner)),
+                        warnings,
+                        new string[] { }
+                    ));
+                }
+                else if (obj.securityDescriptor.Owner != null &&
+                    obj.securityDescriptor.Owner != domainAdminsSid &&
+                    obj.securityDescriptor.Owner != administratorsSid &&
+                    obj.securityDescriptor.Owner != localSystemSid)
                 {
                     // TODO: only flag if not within a parent resource's CREATE_CHILD delegation. Requires adding a post-processing phase, to have that info at hand.
                     Tuple<ObjectClass, string, string> resolved = this.ResolveFromSid(partitionDN, obj.securityDescriptor.Owner);
