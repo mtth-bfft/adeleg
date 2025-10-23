@@ -636,7 +636,7 @@ namespace adeleg.engine
 
                 if (obj.securityDescriptor.Owner != null && obj.securityDescriptor.Owner != domainAdminsSid && obj.securityDescriptor.Owner != administratorsSid)
                 {
-                    // TODO: only flag if not within a parent resource's CREATE_CHILD delegation
+                    // TODO: only flag if not within a parent resource's CREATE_CHILD delegation. Requires adding a post-processing phase, to have that info at hand.
                     Tuple<ObjectClass, string, string> resolved = this.ResolveFromSid(partitionDN, obj.securityDescriptor.Owner);
                     List<string> warnings = new List<string> { "Should be owned by the Domain Admins or Administrators group" };
 
