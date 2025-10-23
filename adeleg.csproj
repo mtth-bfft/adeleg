@@ -81,6 +81,8 @@
     <Compile Include="engine\connector\OradadConnector.cs" />
     <Compile Include="engine\Engine.cs" />
     <Compile Include="engine\Result.cs" />
+    <Compile Include="engine\ResultLocation.cs" />
+    <Compile Include="engine\ResultTrustee.cs" />
     <Compile Include="engine\Utils.cs" />
     <Compile Include="gui\AddExplicitDomainDialog.cs">
       <SubType>Form</SubType>
