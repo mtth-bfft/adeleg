@@ -283,7 +283,7 @@ namespace adeleg.engine
             }
             if (res == null || (res.Item2 == null && res.Item3 == null))
             {
-                res = Tuple.Create<ObjectClass, string, string>(ObjectClass.UnknownTrustee, null, sid.ToString());
+                res = Tuple.Create<ObjectClass, string, string>(ObjectClass.UnknownTrustee, null, null);
             }
             if (forestMetadata.sidResolutionCachePerPartition != null)
             {
@@ -892,7 +892,7 @@ namespace adeleg.engine
             }
             else
             {
-                return new ResultTrustee(null, trustee.Type, trustee.Dn);
+                return new ResultTrustee(trustee.Sid, trustee.Type, trustee.Dn);
             }
         }
 
