@@ -735,6 +735,7 @@ namespace adeleg.engine
             for (int i = 0; i < results.Count; i++) {
                 Result res = results[i];
                 ResultTrustee generalizedTrustee = this.Generalize(res.Trustee);
+                ResultLocation generalizedLocation = this.Generalize(res.Location);
 
                 if (res is OwnerResult)
                 {
@@ -867,6 +868,19 @@ namespace adeleg.engine
             else
             {
                 return new ResultTrustee(null, trustee.Type, trustee.Dn);
+            }
+        }
+
+        public ResultLocation Generalize(ResultLocation location)
+        {
+            if (location is ResultLocationSchemaDefaultSd schema)
+            {
+                return location;
+            }
+            // TODO: generalization based on DN: in domain's NC, root domain's NC, configuration NC, etc.
+            else
+            {
+                return location;
             }
         }
     }
