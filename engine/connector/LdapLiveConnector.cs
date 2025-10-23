@@ -303,7 +303,7 @@ namespace adeleg.engine.connector
 
         public string GetSchemaNC()
         {
-            return this.configurationNC;
+            return this.schemaNC;
         }
 
         public string[] GetPartitionDNs()
