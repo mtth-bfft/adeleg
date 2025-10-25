@@ -65,9 +65,11 @@ namespace adeleg.engine
         {
             this._location = location;
             this._trustee = trustee;
-            this._warnings = warnings == null ? new List<string>() : new List<string>(warnings);
-            this._errors = errors == null ? new List<string>() : new List<string>(errors);
+            // Text needs ForestMetadata to compute (e.g. for objectguids->names), which is not available when deserializing JSON
             this._text = null;
+            // Set to null if empty to avoid serializing warnings: [], errors: [] in each JSON Result
+            this._warnings = (warnings == null || (warnings != null && warnings.Count() == 0)) ? null : warnings.ToList();
+            this._errors = (errors == null || (errors != null && errors.Count() == 0)) ? null : errors.ToList();
         }
 
         public Result WithDisplayForestMetadata(ForestMetadata forestMetadata)
@@ -78,7 +80,7 @@ namespace adeleg.engine
                 res.Append(msg);
                 res.Append(Environment.NewLine);
             }
-            if (_warnings.Count > 0)
+            if (_warnings != null)
             {
                 foreach (string msg in _warnings)
                 {
@@ -87,7 +89,7 @@ namespace adeleg.engine
                     res.Append(msg);
                 }
             }
-            if (_errors.Count > 0)
+            if (_errors != null)
             {
                 foreach (string msg in _errors)
                 {
