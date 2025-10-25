@@ -257,9 +257,9 @@ namespace adeleg.gui
                 e.Value = this.iconList.Images[GetIconIndexForObjectClass(res.TrusteeType)];
             }
 
-            if (res.Errors.Count > 0)
+            if (res.Errors != null && res.Errors.Count > 0)
                 e.CellStyle.BackColor = Color.Red;
-            else if (res.Warnings.Count > 0)
+            else if (res.Warnings != null && res.Warnings.Count > 0)
                 e.CellStyle.BackColor = Color.Yellow;
         }
 
