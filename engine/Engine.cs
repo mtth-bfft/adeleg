@@ -579,8 +579,10 @@ namespace adeleg.engine
 
             foreach (ObjectRecord obj in dataSource.ScanSecurityDescriptors(baseDN, recurse))
             {
-                // TODO: add a post-processing phase, based on a list of DNs that we scanned and had DACL inheritance blocked,
-                // to add the info in each delegation of the list of any child DN that has inheritance blocked as "exceptions"
+                // TODO: we don't flag security descriptors with DACLs protected, because to what trustee should we associate
+                // that finding in the per-trustee view? Instead, need to add a post-processing phase, foreach DN with its
+                // DACL protected, add it as an "exception" in each delegation on a parent container which does not have the
+                // same ACE explicitly.
 
                 // For AdminSDHolder-protected objects, enforce that DACL inheritance is blocked and
                 // ACEs are restricted enough
