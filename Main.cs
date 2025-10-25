@@ -9,6 +9,9 @@ namespace adeleg
     using gui;
     using System.Collections.Generic;
     using System.DirectoryServices.Protocols;
+    using System.IO;
+    using System.Text.Encodings.Web;
+    using System.Text.Json;
 
     internal static class Starter
     {
@@ -26,16 +29,66 @@ namespace adeleg
             Console.WriteLine("");
         }
 
+        static List<Result> LoadTemplate(string filePath)
+        {
+            JsonSerializerOptions options = new JsonSerializerOptions();
+            //options.Converters.Add(new ResultSerializer());
+            options.Converters.Add(new ResultTrusteeSerializer());
+
+            using (StreamReader r = new StreamReader(filePath))
+            {
+                try
+                {
+                    return JsonSerializer.Deserialize<List<Result>>(r.BaseStream, options);
+                }
+                catch (JsonException e)
+                {
+                    MessageBox.Show($"Invalid JSON in template file {filePath} : {e.Message}", "Invalid template file", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return new List<Result>();
+                }
+            }
+        }
+
+        static List<Result> LoadTemplates(string dirPath)
+        {
+            Console.WriteLine($" [.] Loading templates from {dirPath}");
+            DirectoryInfo dir = new DirectoryInfo(dirPath);
+            List<Result> templates = new List<Result>();
+            if (dir.Exists)
+            {
+                foreach (FileInfo file in dir.GetFiles("*.json"))
+                {
+                    templates.AddRange(LoadTemplate(file.FullName));
+                }
+            }
+            return templates;
+        }
+
+        static List<Result> LoadTemplates()
+        {
+            string exePath = System.Reflection.Assembly.GetEntryAssembly().Location;
+            string exeDir = Path.GetDirectoryName(exePath);
+            string mainTemplatesDir = Path.Combine(exeDir, "templates");
+            string userTemplatesDir = Environment.ExpandEnvironmentVariables("%USERPROFILE%\\adeleg-templates");
+
+            List<Result> templates = new List<Result>();
+            templates.AddRange(LoadTemplates(mainTemplatesDir));
+            templates.AddRange(LoadTemplates(userTemplatesDir));
+            return templates;
+        }
+
         [STAThread]
         static int Main(string[] args)
         {
+            List<Result> templates = LoadTemplates();
+
             if (args.Length > 0)
             {
 #if !DEBUG
                 try
                 {
 #endif
-                    return RunCLI(args);
+                    return RunCLI(args, templates);
 #if !DEBUG
                 }
                 catch (Exception exc)
@@ -46,11 +99,11 @@ namespace adeleg
             }
             else
             {
-                return RunGUI();
+                return RunGUI(templates);
             }
         }
 
-        static int RunCLI(string[] args)
+        static int RunCLI(string[] args, List<Result> templates)
         {
             List<IConnector> dataSources = new List<IConnector>();
             List<Result> results = new List<Result>();
@@ -178,7 +231,8 @@ namespace adeleg
                 }
             }
 
-            var engine = new Engine(dataSources);
+            Engine engine = new Engine(dataSources, templates);
+
             var partitionDNs = engine.ListPartitionDNs();
             foreach (string partitionDN in partitionDNs)
             {
@@ -209,7 +263,7 @@ namespace adeleg
             return 1;
         }
 
-        static int RunGUI()
+        static int RunGUI(List<Result> templates)
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
@@ -222,7 +276,7 @@ namespace adeleg
             }
 
             List<Result> results = new List<Result>();
-            Engine engine = new Engine(connectform.dataSources.ToArray());
+            Engine engine = new Engine(connectform.dataSources.ToArray(), templates);
 
             if (connectform.dataSources.Count > 0)
             {

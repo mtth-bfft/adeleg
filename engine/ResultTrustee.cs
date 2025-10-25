@@ -51,7 +51,16 @@ namespace adeleg.engine
     {
         public override ResultTrustee Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
-            throw new NotImplementedException();
+            JsonSerializerOptions options2 = new JsonSerializerOptions(options);
+            options2.AllowTrailingCommas = true;
+            options2.IncludeFields = true;
+            options2.PropertyNameCaseInsensitive = true;
+            options2.RespectNullableAnnotations = false;
+
+            JsonDocument jsonDoc = JsonDocument.ParseValue(ref reader);
+
+            string sid = jsonDoc.RootElement.GetProperty("sid").GetString();
+            return new ResultTrustee(new SecurityIdentifier(sid));
         }
 
         public override void Write(Utf8JsonWriter writer, ResultTrustee trustee, JsonSerializerOptions options)
