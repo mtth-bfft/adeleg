@@ -70,12 +70,14 @@ namespace adeleg.engine
             "{domainSid}-516", // Domain Controllers
             "{domainSid}-521", // Read-Only Domain Controllers
         };
+        private List<Result> templates;
         private Dictionary<string, IConnector> dataSourcePerNamingContext = new Dictionary<string, IConnector>();
         private Dictionary<string, string> forestRootPerNamingContext = new Dictionary<string, string>();
         private Dictionary<string, ForestMetadata> metadataPerForest = new Dictionary<string, ForestMetadata>();
 
-        public Engine(IEnumerable<IConnector> dataSources)
+        public Engine(IEnumerable<IConnector> dataSources, List<Result> templates)
         {
+            this.templates = templates;
             foreach (IConnector dataSource in dataSources)
             {
                 foreach (string partitionDN in dataSource.GetPartitionDNs())
@@ -608,7 +610,7 @@ namespace adeleg.engine
                             new ResultTrustee(obj.securityDescriptor.Owner, resolved.Item1, resolved.Item2, resolved.Item3, forestMetadata.tier0Sids.Contains(obj.securityDescriptor.Owner)),
                             new string[] { },
                             errors
-                        ));
+                        ).WithDisplayForestMetadata(forestMetadata));
                     }
 
                     if (adminSdHolderSd != null)
@@ -631,14 +633,13 @@ namespace adeleg.engine
                             }
                             errors.Add("Should have been removed by AdminSDHolder mechanism, check that the domain controller with Primary Domain Controller Emulator role is running, replication is working, and AdminSDHolder has its default DACL");
 
-                            res.Add(new AceAddResult(
+                            res.Add(new AceAddedResult(
                                 resAce,
-                                forestMetadata,
                                 new ResultLocationDn(obj.distinguishedName, obj.mostSpecificClass),
                                 new ResultTrustee(resAce.SecurityIdentifier, resolved.Item1, resolved.Item2, resolved.Item3, forestMetadata.tier0Sids.Contains(resAce.SecurityIdentifier)),
                                 warnings,
                                 errors
-                            ));
+                            ).WithDisplayForestMetadata(forestMetadata));
                         }
                     }
                     continue;
@@ -656,7 +657,7 @@ namespace adeleg.engine
                         new ResultTrustee(obj.securityDescriptor.Owner, resolved.Item1, resolved.Item2, resolved.Item3, forestMetadata.tier0Sids.Contains(obj.securityDescriptor.Owner)),
                         warnings,
                         new string[] { }
-                    ));
+                    ).WithDisplayForestMetadata(forestMetadata));
                 }
                 else if (obj.securityDescriptor.Owner != null &&
                     obj.securityDescriptor.Owner != domainAdminsSid &&
@@ -672,7 +673,7 @@ namespace adeleg.engine
                         new ResultTrustee(obj.securityDescriptor.Owner, resolved.Item1, resolved.Item2, resolved.Item3, forestMetadata.tier0Sids.Contains(obj.securityDescriptor.Owner)),
                         warnings,
                         new string[] { }
-                    ));
+                    ).WithDisplayForestMetadata(forestMetadata));
                 }
 
                 CommonSecurityDescriptor defaultSD = defaultSdPerClass[obj.mostSpecificClass];
@@ -734,14 +735,13 @@ namespace adeleg.engine
                         warnings.Add($"Resource {rsrcType} improperly de-privileged after being equivalent to Domain Admin, instead of being decommissionned");
                     }
 
-                    res.Add(new AceAddResult(
+                    res.Add(new AceAddedResult(
                         objAce,
-                        forestMetadata,
                         new ResultLocationDn(obj.distinguishedName, obj.mostSpecificClass),
                         new ResultTrustee(objAce.SecurityIdentifier, resolved.Item1, resolved.Item2, resolved.Item3, forestMetadata.tier0Sids.Contains(objAce.SecurityIdentifier)),
                         warnings,
                         new string[] { }
-                    ));
+                    ).WithDisplayForestMetadata(forestMetadata));
                 }
             }
 
@@ -773,23 +773,28 @@ namespace adeleg.engine
                         new string[] { }
                     ));
                 }
-                else if (res is AceAddResult)
+                else if (res is AceAddedResult aceAdd)
                 {
-                    AceAddResult res2 = (AceAddResult)res;
-                    generalized.Add(new AceAddResult(
-                        res2.Ace,
-                        res2.GetAccessDescriptionLines(),
+                    generalized.Add(new AceAddedResult(
+                        aceAdd.Allow,
+                        aceAdd.Flags,
+                        aceAdd.AccessMask,
+                        aceAdd.ObjectType,
+                        aceAdd.InheritedObjectType,
                         res.Location,
                         generalizedTrustee,
                         new string[] { },
                         new string[] { }
                     ));
                 }
-                else if (res is AceRemoveResult res2)
+                else if (res is AceMissingResult aceMissing)
                 {
-                    generalized.Add(new AceRemoveResult(
-                        res2.Ace,
-                        res2.GetAccessDescriptionLines(),
+                    generalized.Add(new AceMissingResult(
+                        aceMissing.Allow,
+                        aceMissing.Flags,
+                        aceMissing.AccessMask,
+                        aceMissing.ObjectType,
+                        aceMissing.InheritedObjectType,
                         res.Location,
                         generalizedTrustee,
                         new string[] { },

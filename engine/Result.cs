@@ -12,22 +12,30 @@ using System.Text.Json.Serialization;
 
 namespace adeleg.engine
 {
+    [JsonConverter(typeof(ResultSerializer))]
     public abstract class Result
     {
+        [JsonIgnore]
+        public abstract string Type { get; }
+
         protected ResultLocation _location;
         protected ResultTrustee _trustee;
         protected List<string> _warnings;
         protected List<string> _errors;
+        protected string _text;
 
         // Properties used by the rest of the code
-        public ResultTrustee Trustee { get => _trustee; }
-        public ResultLocation Location { get => _location; }
-        public IList<string> Warnings { get => _warnings.AsReadOnly(); }
-        public IList<string> Errors { get => _errors.AsReadOnly(); }
+        public ResultTrustee Trustee => _trustee;
+        public ResultLocation Location => _location;
+        public IList<string> Warnings => _warnings;
+        public IList<string> Errors => _errors;
 
         // Properties required by the DataGrid GUI to be able to display them as columns
+        [JsonIgnore]
         public string ResourceHierarchicalDisplayName { get => _location.HierarchicalDisplayName; }
+        [JsonIgnore]
         public ObjectClass LocationType { get => _location.Type; }
+        [JsonIgnore]
         public string TrusteeHierarchicalDisplayName
         {
             get
@@ -42,48 +50,57 @@ namespace adeleg.engine
                     return "(Unknown)";
             }
         }
+        [JsonIgnore]
         public ObjectClass TrusteeType { get => _trustee.Type; }
-        public string Text
-        {
-            get
-            {
-                StringBuilder res = new StringBuilder();
-                foreach (string msg in this.GetAccessDescriptionLines())
-                {
-                    res.Append(msg);
-                    res.Append(Environment.NewLine);
-                }
-                if (_warnings.Count > 0)
-                {
-                    foreach (string msg in _warnings)
-                    {
-                        res.Append(Environment.NewLine);
-                        res.Append("Warning: ");
-                        res.Append(msg);
-                    }
-                }
-                if (_errors.Count > 0)
-                {
-                    foreach (string msg in _errors)
-                    {
-                        res.Append(Environment.NewLine);
-                        res.Append("Error: ");
-                        res.Append(msg);
-                    }
-                }
-                return res.ToString().Trim();
+        [JsonIgnore]
+        public string Text {
+            get {
+                if (this._text == null)
+                    throw new InvalidOperationException("Cannot display Result without a call to SetDisplayForestMetadata() first");
+                return this._text;
             }
         }
 
-        public Result(ResultLocation location, ResultTrustee trustee, IEnumerable<string> warnings, IEnumerable<string> errors)
+        public Result(ResultLocation location, ResultTrustee trustee, IEnumerable<string> warnings = null, IEnumerable<string> errors = null)
         {
             this._location = location;
             this._trustee = trustee;
-            this._warnings = new List<string>(warnings);
-            this._errors = new List<string>(errors);
+            this._warnings = warnings == null ? new List<string>() : new List<string>(warnings);
+            this._errors = errors == null ? new List<string>() : new List<string>(errors);
+            this._text = null;
         }
 
-        public abstract List<string> GetAccessDescriptionLines();
+        public Result WithDisplayForestMetadata(ForestMetadata forestMetadata)
+        {
+            StringBuilder res = new StringBuilder();
+            foreach (string msg in this.GetAccessDescriptionLines(forestMetadata))
+            {
+                res.Append(msg);
+                res.Append(Environment.NewLine);
+            }
+            if (_warnings.Count > 0)
+            {
+                foreach (string msg in _warnings)
+                {
+                    res.Append(Environment.NewLine);
+                    res.Append("Warning: ");
+                    res.Append(msg);
+                }
+            }
+            if (_errors.Count > 0)
+            {
+                foreach (string msg in _errors)
+                {
+                    res.Append(Environment.NewLine);
+                    res.Append("Error: ");
+                    res.Append(msg);
+                }
+            }
+            this._text = res.ToString().Trim();
+            return this;
+        }
+
+        public abstract List<string> GetAccessDescriptionLines(ForestMetadata forestMetadata);
 
         public string ToJson()
         {
@@ -102,12 +119,18 @@ namespace adeleg.engine
 
     public class OwnerResult : Result
     {
-        public OwnerResult(ResultLocation location, ResultTrustee trustee, IEnumerable<string> warnings, IEnumerable<string> errors)
+        public const string SerializedTypeName = "owner";
+
+        [JsonPropertyOrder(0)]
+        public override string Type => OwnerResult.SerializedTypeName;
+
+        [JsonConstructor]
+        public OwnerResult(ResultLocation location, ResultTrustee trustee, IEnumerable<string> warnings = null, IEnumerable<string> errors = null)
             : base(location, trustee, warnings, errors) { }
 
-        public override List<string> GetAccessDescriptionLines()
+        public override List<string> GetAccessDescriptionLines(ForestMetadata forestMetadata)
         {
-            return new List<string> { "Owns this resource, and no Owner Rights limits their access (i.e. equivalent to Full Control)" };
+            return new List<string> { "Owns this resource, and no Owner Rights ACE limits their access (i.e. equivalent to Full Control)" };
         }
     }
 
@@ -133,59 +156,55 @@ namespace adeleg.engine
             (int)ActiveDirectoryRights.Synchronize |
             (int)ActiveDirectoryRights.AccessSystemSecurity;
 
-        protected QualifiedAce _ace;
-        protected List<string> _accessRightsDescr;
+        protected bool _present;
+        protected bool _allow;
+        protected int _flags;
+        protected int _accessMask;
+        protected Guid _objectType;
+        protected Guid _inheritedObjectType;
 
-        public QualifiedAce Ace
-        {
-            get => this._ace;
-        }
+        [JsonIgnore]
+        public bool Present => _present;
+        public bool Allow => _allow;
+        public int Flags => _flags;
+        public int AccessMask => _accessMask;
+        public Guid ObjectType => _objectType;
+        public Guid InheritedObjectType => _inheritedObjectType;
 
-        public Guid ObjType
-        {
-            get
-            {
-                if (this._ace.AceType == AceType.AccessAllowedObject && (((ObjectAce)_ace).ObjectAceFlags & ObjectAceFlags.ObjectAceTypePresent) != 0)
-                {
-                    return ((ObjectAce)_ace).ObjectAceType;
-                }
-                else
-                {
-                    return Guid.Empty;
-                }
-            }
-        }
-        public Guid InheritObjType
-        {
-            get
-            {
-                if (this._ace.AceType == AceType.AccessAllowedObject && (((ObjectAce)_ace).ObjectAceFlags & ObjectAceFlags.InheritedObjectAceTypePresent) != 0)
-                {
-                    return ((ObjectAce)_ace).InheritedObjectAceType;
-                }
-                else
-                {
-                    return Guid.Empty;
-                }
-            }
-        }
-
-        public AceResult(QualifiedAce ace, List<string> accessRightsDescr, ResultLocation location, ResultTrustee trustee, IEnumerable<string> warnings, IEnumerable<string> errors)
+        public AceResult(bool present, bool allow, int flags, int accessMask, Guid objectType, Guid inheritedObjectType, ResultLocation location, ResultTrustee trustee, IEnumerable<string> warnings = null, IEnumerable<string> errors = null)
             : base(location, trustee, warnings, errors)
         {
-            this._ace = ace;
-            this._accessRightsDescr = accessRightsDescr;
+            _present = present;
+            _allow = allow;
+            _flags = flags;
+            _accessMask = accessMask;
+            _objectType = objectType;
+            _inheritedObjectType = inheritedObjectType;
         }
 
-        public AceResult(QualifiedAce ace, ForestMetadata forestMetadata, ResultLocation location, ResultTrustee trustee, IEnumerable<string> warnings, IEnumerable<string> errors)
-            : base(location, trustee, warnings, errors)
+        public AceResult(bool present, QualifiedAce ace, ResultLocation location, ResultTrustee trustee, IEnumerable<string> warnings = null, IEnumerable<string> errors = null)
+            : this(
+                present,
+                (ace.AceType == AceType.AccessAllowed || ace.AceType == AceType.AccessAllowedObject),
+                (int)ace.AceFlags,
+                (int)ace.AccessMask,
+                (ace.AceType == AceType.AccessAllowedObject && (((ObjectAce)ace).ObjectAceFlags & ObjectAceFlags.ObjectAceTypePresent) != 0 ? ((ObjectAce)ace).ObjectAceType : Guid.Empty),
+                (ace.AceType == AceType.AccessAllowedObject && (((ObjectAce)ace).ObjectAceFlags & ObjectAceFlags.InheritedObjectAceTypePresent) != 0 ? ((ObjectAce)ace).InheritedObjectAceType : Guid.Empty),
+                location,
+                trustee,
+                warnings,
+                errors
+            )
         {
-            this._ace = ace;
-            this._accessRightsDescr = new List<string>();
+        }
 
-            bool inherit = ace.AceFlags.HasFlag(AceFlags.ContainerInherit);
-            bool inheritOnly = inherit && ace.AceFlags.HasFlag(AceFlags.InheritOnly);
-            bool noPropagate = inherit && ace.AceFlags.HasFlag(AceFlags.NoPropagateInherit);
+        public override List<string> GetAccessDescriptionLines(ForestMetadata forestMetadata)
+        {
+            List<string> accessRightsDescr = new List<string>();
+
+            bool inherit = (this._flags & (int)AceFlags.ContainerInherit) != 0;
+            bool inheritOnly = inherit && (this._flags & (int)AceFlags.InheritOnly) != 0;
+            bool noPropagate = inherit && (this._flags & (int)AceFlags.NoPropagateInherit) != 0;
 
             string createDeleteInheritDescr;
             if (inherit)
@@ -206,249 +225,202 @@ namespace adeleg.engine
 
             // TODO: specify "on this container and on AdminSdHolder-protected objects (..list..)" if resource DN is AdminSDHolder
 
-            if ((ace.AccessMask & ((int)ActiveDirectoryRights.CreateChild)) != 0)
+            if ((this._accessMask & ((int)ActiveDirectoryRights.CreateChild)) != 0)
             {
                 // TODO: handle CreatorOwner ACE(s) in that same ACL here
-                if (this.ObjType == Guid.Empty)
+                if (this._objectType == Guid.Empty)
                 {
-                    this._accessRightsDescr.Add($"Create objects of any type {createDeleteInheritDescr}");
-                    this._warnings.Add("Best practice: specify which object type can be created. This be abused to create privileged objects, see e.g.CVE - 2021 - 42291 and BadSuccessor vulnerabilities");
+                    accessRightsDescr.Add($"Create objects of any type {createDeleteInheritDescr}");
                 }
-                else
+                else if (forestMetadata.schemaClassNamePerGuid.TryGetValue(this._objectType, out string className))
                 {
-                    if (forestMetadata.schemaClassNamePerGuid.TryGetValue(ObjType, out string className))
-                    {
-                        this._accessRightsDescr.Add($"Create {className} objects {createDeleteInheritDescr}");
-                    }
-                    else
-                    {
-                        // CreateChild with a GUID that is not a class does not allow to create any child object
-                        this._warnings.Add($"Non-sense access mask: Create Child right combined with object type {ObjType} which is not a class");
-                    }
+                    accessRightsDescr.Add($"Create {className} objects {createDeleteInheritDescr}");
                 }
             }
-            if ((ace.AccessMask & ((int)ActiveDirectoryRights.DeleteChild)) != 0)
+            if ((this._accessMask & ((int)ActiveDirectoryRights.DeleteChild)) != 0)
             {
-                if (ObjType == Guid.Empty)
+                if (this._objectType == Guid.Empty)
                 {
-                    this._accessRightsDescr.Add($"Delete any object {createDeleteInheritDescr}");
+                    accessRightsDescr.Add($"Delete any object {createDeleteInheritDescr}");
                 }
-                else
+                else if (forestMetadata.schemaClassNamePerGuid.TryGetValue(this._objectType, out string className))
                 {
-                    if (forestMetadata.schemaClassNamePerGuid.TryGetValue(ObjType, out string className))
-                    {
-                        this._accessRightsDescr.Add($"Delete {className} objects {createDeleteInheritDescr}");
-                    }
-                    else
-                    {
-                        // DeleteChild with a GUID that is not a class does not allow to delete any child object
-                        this._warnings.Add($"Non-sense access mask: Delete Child right combined with {ObjType} which is not a class");
-                    }
+                    accessRightsDescr.Add($"Delete {className} objects {createDeleteInheritDescr}");
                 }
             }
-            if ((ace.AccessMask & ((int)ActiveDirectoryRights.ListChildren)) != 0)
+            if ((this._accessMask & ((int)ActiveDirectoryRights.ListChildren)) != 0)
             {
                 // TODO: fetch dsHeuristics for each forest, and only display this if it has any effect
-                this._accessRightsDescr.Add("List children");
+                accessRightsDescr.Add("List children");
             }
-            if ((ace.AccessMask & ((int)ActiveDirectoryRights.Self)) != 0) // validated write / extended write
+            if ((this._accessMask & ((int)ActiveDirectoryRights.Self)) != 0) // validated write / extended write
             {
-                // ExtendedWrite with WriteProp is the same as WriteProp alone: no validation is enforced.
-                // Warn about it if the ACE does not seem intended to grant "Full Control" (in which case, who cares)
-                if ((ace.AccessMask & ((int)ActiveDirectoryRights.WriteProperty)) != 0 &&
-                    (ace.AccessMask & fullControlAccessRights) != fullControlAccessRights)
+                if (this._objectType == Guid.Empty)
                 {
-                    this._warnings.Add($"Non-sense access mask: ValidatedWrite along with WriteProperty is the same as no validation at all");
+                    accessRightsDescr.Add("Perform all validated writes (add/remove self as member on groups, set DNS hostname and additional hostname, add/remove SPNs)");
                 }
-
-                if (ObjType == Guid.Empty)
+                else if (forestMetadata.schemaAttributeNamePerGuid.TryGetValue(this._objectType, out string attributeName))
                 {
-                    this._accessRightsDescr.Add("Perform all validated writes (add/remove self as member on groups, set DNS hostname and additional hostname, add/remove SPNs)");
-                }
-                else
-                {
-                    if (forestMetadata.schemaAttributeNamePerGuid.TryGetValue(ObjType, out string attributeName))
-                    {
-                        this._accessRightsDescr.Add($"Validated write to {attributeName}");
-                    }
-                    else
-                    {
-                        // Validated write on a non-validated attribute (or on a property set/class/controlaccessright) grants nothing
-                        this._warnings.Add($"Non-sense access mask: Extended write right combined with {ObjType} which is not an attribute with validation");
-                    }
+                    accessRightsDescr.Add($"Validated write to {attributeName}");
                 }
             }
-            if ((ace.AccessMask & ((int)ActiveDirectoryRights.ReadProperty)) != 0)
+            if ((this._accessMask & ((int)ActiveDirectoryRights.ReadProperty)) != 0)
             {
-                if (ObjType == Guid.Empty)
+                if (this._objectType == Guid.Empty)
                 {
-                    this._accessRightsDescr.Add("Read all non-confidential properties");
+                    accessRightsDescr.Add("Read all non-confidential properties");
                 }
-                else
+                else if (forestMetadata.schemaAttributeNamePerGuid.TryGetValue(this._objectType, out string attributeName))
                 {
-                    if (forestMetadata.schemaAttributeNamePerGuid.TryGetValue(ObjType, out string attributeName))
-                    {
-                        this._accessRightsDescr.Add($"Read property {attributeName}");
-                    }
-                    else if (forestMetadata.schemaPropertySetNamePerGuid.TryGetValue(ObjType, out attributeName))
-                    {
-                        string attributeNames = string.Join(", ", forestMetadata.schemaPropertySetMembersPerGuid[ObjType].Select(guid => forestMetadata.schemaAttributeNamePerGuid[guid]));
-                        this._accessRightsDescr.Add($"Read properties in {attributeName} ({attributeNames})");
-                    }
-                    else
-                    {
-                        this._warnings.Add($"Non-sense access mask: Read property right combined with {ObjType} which is not an attribute");
-                    }
+                    accessRightsDescr.Add($"Read property {attributeName}");
+                }
+                else if (forestMetadata.schemaPropertySetNamePerGuid.TryGetValue(this._objectType, out attributeName))
+                {
+                    string attributeNames = string.Join(", ", forestMetadata.schemaPropertySetMembersPerGuid[this._objectType].Select(guid => forestMetadata.schemaAttributeNamePerGuid[guid]));
+                    accessRightsDescr.Add($"Read properties in {attributeName} ({attributeNames})");
                 }
             }
-            if ((ace.AccessMask & ((int)ActiveDirectoryRights.WriteProperty)) != 0)
+            if ((this._accessMask & ((int)ActiveDirectoryRights.WriteProperty)) != 0)
             {
-                if (ObjType == Guid.Empty)
+                if (this._objectType == Guid.Empty)
                 {
-                    this._accessRightsDescr.Add("Write all properties");
+                    accessRightsDescr.Add("Write all properties");
                 }
                 else
                 {
                     string attributeName;
-                    if (forestMetadata.schemaAttributeNamePerGuid.TryGetValue(ObjType, out attributeName))
+                    if (forestMetadata.schemaAttributeNamePerGuid.TryGetValue(this._objectType, out attributeName))
                     {
-                        this._accessRightsDescr.Add($"Write property {attributeName}");
+                        accessRightsDescr.Add($"Write property {attributeName}");
                     }
-                    else if (forestMetadata.schemaPropertySetNamePerGuid.TryGetValue(ObjType, out attributeName))
+                    else if (forestMetadata.schemaPropertySetNamePerGuid.TryGetValue(this._objectType, out attributeName))
                     {
-                        string attributeNames = string.Join(", ", forestMetadata.schemaPropertySetMembersPerGuid[ObjType].Select(guid => forestMetadata.schemaAttributeNamePerGuid[guid]));
-                        this._accessRightsDescr.Add($"Write properties in {attributeName} ({attributeNames})");
-                    }
-                    else
-                    {
-                        this._warnings.Add($"Non-sense access mask: Read property right combined with {ObjType} which is not an attribute");
+                        string attributeNames = string.Join(", ", forestMetadata.schemaPropertySetMembersPerGuid[this._objectType].Select(guid => forestMetadata.schemaAttributeNamePerGuid[guid]));
+                        accessRightsDescr.Add($"Write properties in {attributeName} ({attributeNames})");
                     }
                 }
             }
-            if ((ace.AccessMask & ((int)ActiveDirectoryRights.DeleteTree)) != 0)
+            if ((this._accessMask & ((int)ActiveDirectoryRights.DeleteTree)) != 0)
             {
                 if (inherit && inheritOnly)
-                    this._accessRightsDescr.Add("Delete objects anywhere beneath this container");
+                    accessRightsDescr.Add("Delete objects anywhere beneath this container");
                 else
-                    this._accessRightsDescr.Add("Delete this container and objects anywhere beneath it");
+                    accessRightsDescr.Add("Delete this container and objects anywhere beneath it");
             }
-            if ((ace.AccessMask & ((int)ActiveDirectoryRights.ListObject)) != 0)
+            if ((this._accessMask & ((int)ActiveDirectoryRights.ListObject)) != 0)
             {
                 // TODO: fetch dsHeuristics for each forest, and only display this if it has any effect
-                this._accessRightsDescr.Add("View that this object exists");
+                accessRightsDescr.Add("View that this object exists");
             }
-            if ((ace.AccessMask & ((int)ActiveDirectoryRights.ExtendedRight)) != 0)
+            if ((this._accessMask & ((int)ActiveDirectoryRights.ExtendedRight)) != 0)
             {
-                if (ObjType == Guid.Empty)
+                if (this._objectType == Guid.Empty)
                 {
-                    this._accessRightsDescr.Add("Perform all extended control operations");
+                    accessRightsDescr.Add("Perform all extended control operations");
                 }
-                else
+                else if (forestMetadata.schemaControlAccessNamePerGuid.TryGetValue(this._objectType, out string controlName))
                 {
-                    if (forestMetadata.schemaControlAccessNamePerGuid.TryGetValue(ObjType, out string controlName))
-                    {
-                        this._accessRightsDescr.Add($"Perform {controlName}");
-                    }
-                    else
-                    {
-                        this._warnings.Add($"Non-sense access mask: ControlAccess right combined with {ObjType} which is not an attribute");
-                    }
+                    accessRightsDescr.Add($"Perform {controlName}");
                 }
             }
-            if ((ace.AccessMask & ((int)ActiveDirectoryRights.Delete)) != 0)
+            if ((this._accessMask & ((int)ActiveDirectoryRights.Delete)) != 0)
             {
-                this._accessRightsDescr.Add("Delete this object");
+                accessRightsDescr.Add("Delete this object");
             }
-            if ((ace.AccessMask & ((int)ActiveDirectoryRights.ReadControl)) != 0)
+            if ((this._accessMask & ((int)ActiveDirectoryRights.ReadControl)) != 0)
             {
-                this._accessRightsDescr.Add("Read this object's owner and ACL");
+                accessRightsDescr.Add("Read this object's owner and ACL");
             }
-            if ((ace.AccessMask & ((int)ActiveDirectoryRights.WriteDacl)) != 0)
+            if ((this._accessMask & ((int)ActiveDirectoryRights.WriteDacl)) != 0)
             {
-                this._accessRightsDescr.Add("Add or remove delegations on this object (equivalent to Full Control)");
+                accessRightsDescr.Add("Add or remove delegations on this object (equivalent to Full Control)");
             }
-            if ((ace.AccessMask & ((int)ActiveDirectoryRights.WriteOwner)) != 0)
+            if ((this._accessMask & ((int)ActiveDirectoryRights.WriteOwner)) != 0)
             {
-                this._accessRightsDescr.Add("Change this object's owner (equivalent to Full Control)");
+                accessRightsDescr.Add("Change this object's owner (equivalent to Full Control)");
             }
-            if ((ace.AccessMask & ((int)ActiveDirectoryRights.AccessSystemSecurity)) != 0)
+            if ((this._accessMask & ((int)ActiveDirectoryRights.AccessSystemSecurity)) != 0)
             {
-                this._accessRightsDescr.Add("Add or remove audit rules on this object");
+                accessRightsDescr.Add("Add or remove audit rules on this object");
             }
-            if ((ace.AccessMask & handledAccessRights) != ace.AccessMask)
-            {
-                int unsupportedAccessMask = ace.AccessMask & ~handledAccessRights;
-                this._warnings.Add($"Unsupported access rights {unsupportedAccessMask:X}");
-            }
-        }
 
-        public override List<string> GetAccessDescriptionLines()
+            return accessRightsDescr;
+        }
+    }
+
+    public class AceAddedResult : AceResult
+    {
+        public const string SerializedTypeName = "ace_added";
+
+        [JsonPropertyOrder(0)]
+        public override string Type => AceAddedResult.SerializedTypeName;
+
+        [JsonConstructor]
+        public AceAddedResult(bool Allow, int Flags, int AccessMask, Guid ObjectType, Guid InheritedObjectType, ResultLocation Location, ResultTrustee Trustee, IList<string> warnings = null, IList<string> errors = null)
+            : base(true, Allow, Flags, AccessMask, ObjectType, InheritedObjectType, Location, Trustee, warnings, errors)
         {
-            return this._accessRightsDescr;
+        }
+
+        public AceAddedResult(QualifiedAce ace, ResultLocation location, ResultTrustee trustee, IEnumerable<string> warnings = null, IEnumerable<string> errors = null)
+            : base(true, ace, location, trustee, warnings, errors)
+        {
         }
     }
 
-    public class AceAddResult : AceResult {
-        public AceAddResult(QualifiedAce ace, ForestMetadata forestMetadata, ResultLocation location, ResultTrustee trustee, IEnumerable<string> warnings, IEnumerable<string> errors) :
-            base(ace, forestMetadata, location, trustee, warnings, errors) { }
+    public class AceMissingResult : AceResult
+    {
+        public const string SerializedTypeName = "ace_missing";
 
-        public AceAddResult(QualifiedAce ace, List<string> accessRightsDescr, ResultLocation location, ResultTrustee trustee, IEnumerable<string> warnings, IEnumerable<string> errors) :
-            base(ace, accessRightsDescr, location, trustee, warnings, errors) { }
-    }
-    public class AceRemoveResult : AceResult {
-        public AceRemoveResult(QualifiedAce ace, ForestMetadata forestMetadata, ResultLocation location, ResultTrustee trustee, IEnumerable<string> warnings, IEnumerable<string> errors) :
-            base(ace, forestMetadata, location, trustee, warnings, errors)
-        { }
+        [JsonPropertyOrder(0)]
+        public override string Type => AceMissingResult.SerializedTypeName;
 
-        public AceRemoveResult(QualifiedAce ace, List<string> accessRightsDescr, ResultLocation location, ResultTrustee trustee, IEnumerable<string> warnings, IEnumerable<string> errors) :
-            base(ace, accessRightsDescr, location, trustee, warnings, errors)
-        { }
+        [JsonConstructor]
+        public AceMissingResult(bool allow, int flags, int accessMask, Guid objectType, Guid inheritedObjectType, ResultLocation location, ResultTrustee trustee, IList<string> warnings = null, IList<string> errors = null)
+            : base(false, allow, flags, accessMask, objectType, inheritedObjectType, location, trustee, warnings, errors)
+        {
+        }
+
+        public AceMissingResult(QualifiedAce ace, ResultLocation location, ResultTrustee trustee, IEnumerable<string> warnings = null, IEnumerable<string> errors = null)
+            : base(false, ace, location, trustee, warnings, errors)
+        {
+        }
     }
 
     public class ResultSerializer : JsonConverter<Result>
     {
         public override Result Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
-            throw new NotImplementedException();
+            JsonSerializerOptions options2 = new JsonSerializerOptions(options);
+            options2.AllowTrailingCommas = true;
+            options2.IncludeFields = true;
+            options2.PropertyNameCaseInsensitive = true;
+            options2.RespectNullableAnnotations = false;
+
+            using (var jsonDoc = JsonDocument.ParseValue(ref reader))
+            {
+                // C# can't deserialize an abstract class based on a "type" field by itself,
+                // so we switch-case our subtypes ourselves.
+                string typeStr = jsonDoc.RootElement.GetProperty("type").GetString();
+                switch (typeStr)
+                {
+                    case OwnerResult.SerializedTypeName:
+                        return jsonDoc.RootElement.Deserialize<OwnerResult>(options2);
+                    case AceAddedResult.SerializedTypeName:
+                        return jsonDoc.RootElement.Deserialize<AceAddedResult>(options2);
+                    case AceMissingResult.SerializedTypeName:
+                        return jsonDoc.RootElement.Deserialize<AceMissingResult>(options2);
+                    default:
+                        throw new JsonException($"Unsupported result type {typeStr}");
+                }
+            }
         }
 
         public override void Write(Utf8JsonWriter writer, Result result, JsonSerializerOptions options)
         {
-            writer.WriteStartObject();
-
-            writer.WritePropertyName("trustee");
-            JsonConverter<ResultTrustee> trusteeConverter = (JsonConverter<ResultTrustee>)options.GetConverter(typeof(ResultTrustee));
-            trusteeConverter.Write(writer, result.Trustee, options);
-
-            writer.WritePropertyName("resource");
-            JsonConverter<ResultLocation> locationConverter = (JsonConverter<ResultLocation>)options.GetConverter(typeof(ResultLocation));
-            locationConverter.Write(writer, result.Location, options);
-
-            writer.WritePropertyName("rights");
-            writer.WriteStartArray();
-            foreach (string right in result.GetAccessDescriptionLines())
-                writer.WriteStringValue(right);
-            writer.WriteEndArray();
-
-            if (result.Warnings.Count > 0)
-            {
-                writer.WritePropertyName("warnings");
-                writer.WriteStartArray();
-                foreach (string msg in result.Warnings)
-                    writer.WriteStringValue(msg);
-                writer.WriteEndArray();
-            }
-
-            if (result.Errors.Count > 0)
-            {
-                writer.WritePropertyName("errors");
-                writer.WriteStartArray();
-                foreach (string msg in result.Errors)
-                    writer.WriteStringValue(msg);
-                writer.WriteEndArray();
-            }
-
-            writer.WriteEndObject();
+            var options2 = new JsonSerializerOptions(options);
+            options2.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+            options2.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault;
+            JsonSerializer.Serialize(writer, (object)result, options2);
         }
     }
 }

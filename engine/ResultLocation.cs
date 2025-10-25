@@ -1,10 +1,12 @@
 ﻿using adeleg.engine.connector;
 using System;
+using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace adeleg.engine
 {
+    [JsonConverter(typeof(ResultLocationSerializer))]
     public abstract class ResultLocation
     {
         ObjectClass _type;
@@ -87,7 +89,23 @@ namespace adeleg.engine
     {
         public override ResultLocation Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
-            throw new NotImplementedException();
+            JsonSerializerOptions options2 = new JsonSerializerOptions(options);
+            options2.AllowTrailingCommas = true;
+            options2.IncludeFields = true;
+            options2.PropertyNameCaseInsensitive = true;
+            options2.RespectNullableAnnotations = false;
+
+            JsonDocument jsonDoc = JsonDocument.ParseValue(ref reader);
+
+            JsonElement element;
+            if (jsonDoc.RootElement.TryGetProperty("dn", out element))
+            {
+               return new ResultLocationDn(element.ToString(), "container");
+            }
+            else
+            {
+                throw new InvalidDataException("Result location must contain a \"dn\" key");
+            }
         }
 
         public override void Write(Utf8JsonWriter writer, ResultLocation location, JsonSerializerOptions options)
@@ -100,7 +118,7 @@ namespace adeleg.engine
             }
             else if (location is ResultLocationSchemaDefaultSd schema)
             {
-                writer.WriteString("className", schema.ClassName);
+                writer.WriteString("default_sd_of_class", schema.ClassName);
             }
             else
             {
